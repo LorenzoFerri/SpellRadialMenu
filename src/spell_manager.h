@@ -19,19 +19,7 @@ struct SpellSlot {
     bool is_current = false;
 };
 
-struct SpellOffsets {
-    std::uintptr_t local_player_rva = 0;
-    std::uintptr_t current_spell_slot_offset = 0;
-    std::uintptr_t memorized_spells_offset = 0;
-    std::uintptr_t spell_entry_stride = sizeof(std::uint64_t);
-    std::uintptr_t spell_id_offset = 0;
-    std::uintptr_t equip_spell_function_rva = 0;
-    std::size_t max_slots = 14;
-};
-
 bool InitializeSpellManager();
-void SetOffsets(const SpellOffsets& offsets);
-const SpellOffsets& GetOffsets();
 int GetCurrentSpellSlot();
 std::vector<SpellSlot> GetMemorizedSpells();
 bool SwitchToSpellSlot(std::size_t slot_index);

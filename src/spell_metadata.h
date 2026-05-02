@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
+
 namespace radial_spell_menu {
 
 enum class SpellCategory : std::uint8_t {
@@ -18,7 +18,6 @@ struct ResolvedSpellMetadata {
 };
 
 bool InitializeSpellMetadata();
-void BeginRuntimeMsgLookupTrace(const std::vector<std::uint32_t>& spell_ids, std::uint32_t focused_spell_id);
 ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id);
 
 }  // namespace radial_spell_menu
