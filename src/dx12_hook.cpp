@@ -2,6 +2,7 @@
 #include "common.h"
 #include "radial_menu.h"
 #include "spell_manager.h"
+#include "eldenring_font.h"
 
 #include <MinHook.h>
 #include <windows.h>
@@ -128,7 +129,12 @@ static void Init(IDXGISwapChain3* sc)
     // ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr;
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.Fonts->AddFontFromMemoryCompressedTTF(
+        EldenRingFont_compressed_data,
+        (int)EldenRingFont_compressed_size,
+        20.0f);
     ImGui_ImplWin32_Init(g_hwnd);
 
     ImGui_ImplDX12_InitInfo info{};
