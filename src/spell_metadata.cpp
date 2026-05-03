@@ -7,9 +7,7 @@
 
 #include <cstdio>
 #include <mutex>
-#include <string>
 #include <unordered_map>
-#include <utility>
 
 namespace radial_spell_menu {
 

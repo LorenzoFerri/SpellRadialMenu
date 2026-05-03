@@ -2,7 +2,6 @@
 
 #include "common.h"
 #include "radial_menu.h"
-#include "spell_metadata.h"
 #include "spell_manager.h"
 
 #include <MinHook.h>
@@ -12,7 +11,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <vector>
 
 namespace radial_spell_menu::input_hook {
 

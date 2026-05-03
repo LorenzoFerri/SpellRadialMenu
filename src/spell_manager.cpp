@@ -1,10 +1,7 @@
 #include "spell_manager.h"
 
 #include "common.h"
-#include "spell_metadata.h"
 
-#include <cstring>
-#include <cstdint>
 #include <windows.h>
 
 namespace radial_spell_menu {

@@ -1,12 +1,9 @@
 #include "radial_menu.h"
 
-#include <imgui.h>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
-#include <string>
 
 namespace radial_spell_menu::radial_menu {
 

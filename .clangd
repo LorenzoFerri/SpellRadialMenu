@@ -1,0 +1,10 @@
+CompileFlags:
+  # Cross-compiled for Windows x86-64; tell clangd the real target so it
+  # doesn't fall back to the host platform headers and flags.
+  Add:
+    - --target=x86_64-w64-mingw32
+
+Diagnostics:
+  # These are expected in a mingw cross-compilation environment.
+  Suppress:
+    - -Wunknown-warning-option

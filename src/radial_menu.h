@@ -3,8 +3,6 @@
 #include "spell_manager.h"
 
 #include <imgui.h>
-#include <cstddef>
-#include <vector>
 
 namespace radial_spell_menu::radial_menu {
 
