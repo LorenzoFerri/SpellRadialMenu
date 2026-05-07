@@ -47,6 +47,19 @@ bool g_initialized = false;
 bool g_failed = false;
 const char* g_last_dflt_error = "";
 
+void ResetLoadedIconState()
+{
+    for (Atlas& atlas : g_atlases) {
+        SafeRelease(atlas.texture);
+        atlas.name.clear();
+        atlas.gpu_srv = {};
+        atlas.width = 1.0f;
+        atlas.height = 1.0f;
+    }
+    g_icons.clear();
+    g_atlas_count = 0;
+}
+
 std::uint32_t ReadLe32(const std::vector<std::uint8_t>& bytes, std::size_t offset)
 {
     return std::uint32_t(bytes[offset]) |
@@ -722,8 +735,7 @@ bool TryInitialize(
             continue;
         }
 
-        g_icons.clear();
-        g_atlas_count = 0;
+        ResetLoadedIconState();
         ParseLayouts(sblyt);
         std::size_t uploaded_count = 0;
         for (std::size_t i = 0; i < g_atlas_count; ++i) {
@@ -735,6 +747,16 @@ bool TryInitialize(
                 ++uploaded_count;
             }
         }
+
+        if (uploaded_count == 0) {
+            Log("Icon loader: %s icon assets parsed but no atlases uploaded (icons=%zu atlases=%zu).",
+                candidate.label,
+                g_icons.size(),
+                g_atlas_count);
+            ResetLoadedIconState();
+            continue;
+        }
+
         selected_label = candidate.label;
         selected_uploaded_count = uploaded_count;
         break;
@@ -743,6 +765,7 @@ bool TryInitialize(
     if (!saw_assets) return false;
     if (g_icons.empty() || !uploaded_any) {
         Log("Icon loader: failed to upload atlases (icons=%zu uploaded=%d).", g_icons.size(), static_cast<int>(uploaded_any));
+        ResetLoadedIconState();
         g_failed = true;
         return false;
     }
@@ -778,15 +801,7 @@ radial_menu::IconTextureInfo Resolve(std::uint32_t icon_id)
 
 void Shutdown()
 {
-    for (Atlas& atlas : g_atlases) {
-        SafeRelease(atlas.texture);
-        atlas.name.clear();
-        atlas.gpu_srv = {};
-        atlas.width = 1.0f;
-        atlas.height = 1.0f;
-    }
-    g_icons.clear();
-    g_atlas_count = 0;
+    ResetLoadedIconState();
     g_initialized = false;
     g_failed = false;
 }
