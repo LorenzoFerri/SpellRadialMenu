@@ -53,10 +53,19 @@ constexpr std::uintptr_t kRowDescDataOffset     = 0x08;
 constexpr std::uintptr_t kMagicIconIdOffset     = 0x14;
 constexpr std::uintptr_t kMagicReqIntOffset     = 0x22;
 constexpr std::uintptr_t kMagicReqFaithOffset   = 0x23;
-constexpr std::int32_t   kLikelyMaxIconId       = 99999;
+constexpr std::uintptr_t kGoodsIconIdOffset     = 0x30;
+constexpr std::uintptr_t kGoodsTypeOffset       = 0x3E;
+constexpr std::uint8_t   kGoodsTypeSorcery = 5;
+constexpr std::uint8_t   kGoodsTypeIncantation = 16;
 
-constexpr unsigned int kMagicNameCategory = 10;
+constexpr unsigned int kGoodsNameCategory     = 0x0A;
+constexpr unsigned int kMagicNameCategory     = 0x0E;
+constexpr unsigned int kGoodsNameDlc1Category = 0x13F;
+constexpr unsigned int kMagicNameDlc1Category = 0x145;
+constexpr unsigned int kGoodsNameDlc2Category = 0x1A3;
+constexpr unsigned int kMagicNameDlc2Category = 0x1A9;
 constexpr unsigned int kMessageVersion    = 0;
+constexpr unsigned int kMaxMessageVersion = 3;
 
 using MsgRepositoryLookupFn = const wchar_t* (*)(void*, unsigned int, unsigned int, int);
 
@@ -70,6 +79,7 @@ bool                 g_logged_lookup_failure     = false;
 
 std::mutex                                    g_cache_mutex;
 std::unordered_map<std::uint32_t, std::string> g_name_cache;
+std::uintptr_t g_goods_param_offset = 0;
 
 const wchar_t* HookedMsgRepositoryLookup(void* repo, unsigned int version, unsigned int category, int msg_id);
 
@@ -104,6 +114,75 @@ bool EnsureMsgHookInstalled()
     return true;
 }
 
+bool IsReadablePointer(const void* ptr, std::size_t bytes)
+{
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!ptr || VirtualQuery(ptr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+    if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) || (mbi.Protect & PAGE_NOACCESS)) return false;
+
+    const DWORD protect = mbi.Protect & 0xFFu;
+    const bool readable = protect == PAGE_READONLY || protect == PAGE_READWRITE || protect == PAGE_WRITECOPY ||
+                          protect == PAGE_EXECUTE_READ || protect == PAGE_EXECUTE_READWRITE || protect == PAGE_EXECUTE_WRITECOPY;
+    if (!readable) return false;
+
+    const auto begin = reinterpret_cast<std::uintptr_t>(ptr);
+    const auto region_begin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+    const auto region_end = region_begin + static_cast<std::uintptr_t>(mbi.RegionSize);
+    return begin >= region_begin && begin + bytes >= begin && begin + bytes <= region_end;
+}
+
+const std::uint8_t* FindParamRowData(std::uintptr_t repo, std::uintptr_t param_offset, std::uint32_t row_id)
+{
+    if (!IsReadablePointer(reinterpret_cast<const void*>(repo + param_offset), sizeof(std::uintptr_t))) return nullptr;
+    const auto holder = *reinterpret_cast<const std::uintptr_t*>(repo + param_offset);
+    if (!holder || !IsReadablePointer(reinterpret_cast<const void*>(holder + kParamContainerStep1), sizeof(std::uintptr_t))) return nullptr;
+    const auto container = *reinterpret_cast<const std::uintptr_t*>(holder + kParamContainerStep1);
+    if (!container || !IsReadablePointer(reinterpret_cast<const void*>(container + kParamContainerStep2), sizeof(std::uintptr_t))) return nullptr;
+    const auto base = *reinterpret_cast<const std::uintptr_t*>(container + kParamContainerStep2);
+    if (!base || !IsReadablePointer(reinterpret_cast<const void*>(base + kParamRowCountOffset), sizeof(std::uint16_t))) return nullptr;
+
+    const auto row_count = *reinterpret_cast<const std::uint16_t*>(base + kParamRowCountOffset);
+    if (row_count == 0 || row_count > 10000) return nullptr;
+    if (!IsReadablePointer(reinterpret_cast<const void*>(base + kParamRowTableStart), kParamRowStride * row_count)) return nullptr;
+
+    for (std::uint16_t i = 0; i < row_count; ++i) {
+        const auto desc = base + kParamRowTableStart + kParamRowStride * i;
+        const auto current_row_id = *reinterpret_cast<const std::int32_t*>(desc + kRowDescIdOffset);
+        if (current_row_id != static_cast<std::int32_t>(row_id)) continue;
+
+        const auto data_offset = *reinterpret_cast<const std::int64_t*>(desc + kRowDescDataOffset);
+        const auto data = base + static_cast<std::uintptr_t>(data_offset);
+        return IsReadablePointer(reinterpret_cast<const void*>(data), 0x40) ? reinterpret_cast<const std::uint8_t*>(data) : nullptr;
+    }
+
+    return nullptr;
+}
+
+std::uint32_t ReadGoodsIconId(std::uintptr_t repo, std::uint32_t spell_id)
+{
+    auto read_from_offset = [&](std::uintptr_t offset) -> std::uint32_t {
+        const std::uint8_t* data = FindParamRowData(repo, offset, spell_id);
+        if (!data || (data[kGoodsTypeOffset] != kGoodsTypeSorcery && data[kGoodsTypeOffset] != kGoodsTypeIncantation)) return 0;
+        const auto icon_id = *reinterpret_cast<const std::uint16_t*>(data + kGoodsIconIdOffset);
+        return icon_id != 0 ? static_cast<std::uint32_t>(icon_id) : 0;
+    };
+
+    if (g_goods_param_offset) {
+        if (const std::uint32_t icon_id = read_from_offset(g_goods_param_offset)) return icon_id;
+    }
+
+    for (std::uintptr_t offset = 0; offset < 0x1000; offset += sizeof(void*)) {
+        if (offset == kMagicParamOffset) continue;
+        const std::uint32_t icon_id = read_from_offset(offset);
+        if (icon_id != 0) {
+            g_goods_param_offset = offset;
+            return icon_id;
+        }
+    }
+
+    return 0;
+}
+
 MsgRepositoryLookupFn GetMsgLookup()
 {
     if (!EnsureMsgHookInstalled()) {
@@ -132,8 +211,23 @@ std::string LookupMagicName(std::uint32_t msg_id)
     if (!lookup) return {};
     void* const repo = GetMsgRepositoryInstance();
     if (!repo) return {};
-    const wchar_t* result = lookup(repo, kMessageVersion, kMagicNameCategory, static_cast<int>(msg_id));
-    return Utf8FromWide(result);
+
+    constexpr unsigned int kCategories[] = {
+        kMagicNameCategory,
+        kMagicNameDlc1Category,
+        kMagicNameDlc2Category,
+        kGoodsNameCategory,
+        kGoodsNameDlc1Category,
+        kGoodsNameDlc2Category,
+    };
+    for (unsigned int category : kCategories) {
+        for (unsigned int version = kMessageVersion; version <= kMaxMessageVersion; ++version) {
+            const wchar_t* result = lookup(repo, version, category, static_cast<int>(msg_id));
+            std::string name = Utf8FromWide(result);
+            if (!name.empty()) return name;
+        }
+    }
+    return {};
 }
 
 const wchar_t* HookedMsgRepositoryLookup(void* repo, unsigned int version, unsigned int category, int msg_id)
@@ -155,29 +249,14 @@ RuntimeMagicMetadata ReadRuntimeMagicMetadata(std::uint32_t spell_id)
 
     const auto repo = *reinterpret_cast<const std::uintptr_t*>(g_solo_param_address);
     if (!repo) return {};
-    const auto holder    = *reinterpret_cast<const std::uintptr_t*>(repo + kMagicParamOffset);
-    if (!holder) return {};
-    const auto container = *reinterpret_cast<const std::uintptr_t*>(holder + kParamContainerStep1);
-    if (!container) return {};
-    const auto base      = *reinterpret_cast<const std::uintptr_t*>(container + kParamContainerStep2);
-    if (!base) return {};
-
-    const auto row_count = *reinterpret_cast<const std::uint16_t*>(base + kParamRowCountOffset);
-    for (std::uint16_t i = 0; i < row_count; ++i) {
-        const auto desc    = base + kParamRowTableStart + kParamRowStride * i;
-        const auto row_id  = *reinterpret_cast<const std::int32_t*>(desc + kRowDescIdOffset);
-        if (row_id != static_cast<std::int32_t>(spell_id)) continue;
-
-        const auto data_offset = *reinterpret_cast<const std::int64_t*>(desc + kRowDescDataOffset);
-        const auto data = base + static_cast<std::uintptr_t>(data_offset);
+    const std::uint8_t* data = FindParamRowData(repo, kMagicParamOffset, spell_id);
+    if (data) {
 
         RuntimeMagicMetadata meta{};
-        const auto icon32 = *reinterpret_cast<const std::int32_t*>(data + kMagicIconIdOffset);
-        if (icon32 > 0 && icon32 <= kLikelyMaxIconId) {
-            meta.icon_id = static_cast<std::uint32_t>(icon32);
-        } else {
-            const auto icon16 = *reinterpret_cast<const std::int16_t*>(data + kMagicIconIdOffset);
-            meta.icon_id = icon16 > 0 ? static_cast<std::uint32_t>(icon16) : 0;
+        const auto icon16 = *reinterpret_cast<const std::int16_t*>(data + kMagicIconIdOffset);
+        meta.icon_id = icon16 > 0 ? static_cast<std::uint32_t>(icon16) : 0;
+        if (const std::uint32_t goods_icon_id = ReadGoodsIconId(repo, spell_id)) {
+            meta.icon_id = goods_icon_id;
         }
         const auto faith = *reinterpret_cast<const std::uint8_t*>(data + kMagicReqFaithOffset);
         const auto intel = *reinterpret_cast<const std::uint8_t*>(data + kMagicReqIntOffset);
@@ -201,9 +280,10 @@ ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id)
 {
     {
         std::lock_guard lock(g_cache_mutex);
-        if (const auto it = g_name_cache.find(spell_id); it != g_name_cache.end())
+        if (const auto it = g_name_cache.find(spell_id); it != g_name_cache.end()) {
             return { it->second, ReadRuntimeMagicMetadata(spell_id).icon_id,
                      ReadRuntimeMagicMetadata(spell_id).category };
+        }
     }
 
     const auto runtime = ReadRuntimeMagicMetadata(spell_id);
@@ -212,10 +292,10 @@ ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id)
         char buf[32] = {};
         std::snprintf(buf, sizeof(buf), "Spell %u", spell_id);
         name = buf;
-    } else {
-        std::lock_guard lock(g_cache_mutex);
-        g_name_cache[spell_id] = name;
     }
+
+    std::lock_guard lock(g_cache_mutex);
+    g_name_cache[spell_id] = name;
 
     return { name, runtime.icon_id, runtime.category };
 }

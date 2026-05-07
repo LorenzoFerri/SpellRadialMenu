@@ -10,7 +10,7 @@ This document describes how the codebase is structured, how to build and test ch
 bash build.sh
 ```
 
-Always use `build.sh` — it updates vendor libraries, selects the right cross-compiler, and deploys the DLL to the test folder (`~/ERRv2.2.4.4/dll/offline/`) automatically. Do not invoke `cmake` or `ninja` directly.
+Always use `build.sh` — it prepares pinned vendor libraries if missing and selects the right cross-compiler.
 
 The project cross-compiles a Windows DLL on Linux using mingw-w64 or llvm-mingw. Do **not** attempt a native Linux build.
 
@@ -24,7 +24,7 @@ There is no automated test suite. The only way to verify behaviour is to build a
 me3 launch --profile "/home/faith/RadialSpellMenu/myprofile.me3"
 ```
 
-Log output goes to `RadialSpellMenu.log` next to the DLL (i.e. `~/ERRv2.2.4.4/dll/offline/RadialSpellMenu.log`). Check this file for errors from `Log()` calls. The log is also written to the debug output stream, visible in tools like DebugView on Windows.
+Log output goes to `RadialSpellMenu.log` next to the DLL. Check this file for errors from `Log()` calls. The log is also written to the debug output stream, visible in tools like DebugView on Windows.
 
 ---
 

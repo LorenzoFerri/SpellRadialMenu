@@ -1,5 +1,7 @@
 #include "dx12_hook.h"
+#include "asset_reader.h"
 #include "common.h"
+#include "icon_loader.h"
 #include "radial_menu.h"
 #include "spell_manager.h"
 #include "eldenring_font.h"
@@ -11,6 +13,8 @@
 #include <imgui.h>
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
+
+#include <cstddef>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -34,6 +38,9 @@ static ID3D12GraphicsCommandList*  g_cmdlist   = nullptr;
 static ID3D12DescriptorHeap*       g_rtv_heap  = nullptr;
 static ID3D12DescriptorHeap*       g_srv_heap  = nullptr;
 static UINT                        g_rtv_stride = 0;
+static D3D12_CPU_DESCRIPTOR_HANDLE g_icon_srv_cpu[icon_loader::kMaxAtlases] = {};
+static D3D12_GPU_DESCRIPTOR_HANDLE g_icon_srv_gpu[icon_loader::kMaxAtlases] = {};
+static bool                        g_icon_srv_allocated = false;
 
 static HWND    g_hwnd        = nullptr;
 static WNDPROC g_old_wndproc = nullptr;
@@ -68,6 +75,22 @@ static void SrvAlloc(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu,
 static void SrvFree(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE,
                     D3D12_GPU_DESCRIPTOR_HANDLE) {}
 
+static void TryInitializeIcons()
+{
+    if (!asset_reader::Install()) return;
+
+    if (!g_icon_srv_allocated) {
+        for (std::size_t i = 0; i < icon_loader::kMaxAtlases; ++i) {
+            SrvAlloc(nullptr, &g_icon_srv_cpu[i], &g_icon_srv_gpu[i]);
+        }
+        g_icon_srv_allocated = true;
+    }
+
+    if (icon_loader::TryInitialize(g_device, g_queue, g_icon_srv_cpu, g_icon_srv_gpu, icon_loader::kMaxAtlases)) {
+        radial_menu::SetIconTextureResolver(&icon_loader::Resolve);
+    }
+}
+
 // ── ImGui + D3D12 init (called on first Present) ──────────────────────────
 static void Init(IDXGISwapChain3* sc)
 {
@@ -95,7 +118,7 @@ static void Init(IDXGISwapChain3* sc)
     {
         D3D12_DESCRIPTOR_HEAP_DESC d{};
         d.Type  = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        d.NumDescriptors = 8;
+        d.NumDescriptors = 16;
         d.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(g_device->CreateDescriptorHeap(&d, IID_PPV_ARGS(&g_srv_heap))))
             { Log("Init: SRV heap failed"); return; }
@@ -148,6 +171,7 @@ static void Init(IDXGISwapChain3* sc)
     ImGui_ImplDX12_Init(&info);
 
     g_old_wndproc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, (LONG_PTR)HookedWndProc);
+    TryInitializeIcons();
     g_ready = true;
     Log("ImGui ready");
 }
@@ -159,6 +183,8 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* sc, UINT sync, U
         if (g_queue) Init(sc);
         return g_orig_present(sc, sync, flags);
     }
+
+    TryInitializeIcons();
 
     UINT idx = sc->GetCurrentBackBufferIndex();
     Frame& f = g_frames[idx];
@@ -286,6 +312,7 @@ bool Install()
 
 void Shutdown()
 {
+    icon_loader::Shutdown();
     if (g_hook_present) { MH_DisableHook(g_hook_present); MH_RemoveHook(g_hook_present); }
     if (g_hook_ecl)     { MH_DisableHook(g_hook_ecl);     MH_RemoveHook(g_hook_ecl); }
 

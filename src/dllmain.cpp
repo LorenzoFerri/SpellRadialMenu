@@ -1,4 +1,5 @@
 #include "common.h"
+#include "asset_reader.h"
 #include "dx12_hook.h"
 #include "input_hook.h"
 #include "spell_manager.h"
@@ -15,6 +16,7 @@ DWORD WINAPI InitializeRadialSpellMenu(LPVOID)
         return 0;
     }
 
+    radial_spell_menu::asset_reader::Install();
     radial_spell_menu::InitializeSpellManager();
     radial_spell_menu::input_hook::Install();
     radial_spell_menu::dx12_hook::Install();
@@ -25,6 +27,7 @@ DWORD WINAPI InitializeRadialSpellMenu(LPVOID)
 void ShutdownRadialSpellMenu()
 {
     radial_spell_menu::dx12_hook::Shutdown();
+    radial_spell_menu::asset_reader::Shutdown();
     radial_spell_menu::input_hook::Shutdown();
     MH_Uninitialize();
     radial_spell_menu::Log("Shutdown completed.");

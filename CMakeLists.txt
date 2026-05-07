@@ -21,15 +21,19 @@ foreach(required_path
         "${MINHOOK_ROOT}/include/MinHook.h"
         "${MINHOOK_ROOT}/src/buffer.c")
     if(NOT EXISTS "${required_path}")
-        message(FATAL_ERROR "Missing vendored dependency file: ${required_path}. Run ./build.sh to clone vendor libraries.")
+        message(FATAL_ERROR "Missing vendored dependency file: ${required_path}. Run build.sh on Linux or build.ps1 on Windows.")
     endif()
 endforeach()
 
 add_library(RadialSpellMenu SHARED
     src/dllmain.cpp
     src/common.h
+    src/asset_reader.cpp
+    src/asset_reader.h
     src/input_hook.cpp
     src/input_hook.h
+    src/icon_loader.cpp
+    src/icon_loader.h
     src/dx12_hook.cpp
     src/dx12_hook.h
     src/radial_menu.cpp
@@ -76,6 +80,7 @@ target_link_libraries(RadialSpellMenu PRIVATE
     d3dcompiler
     dxgi
     dwmapi
+    bcrypt
     user32
     gdi32
     xinput
