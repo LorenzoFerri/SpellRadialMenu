@@ -29,7 +29,7 @@ An Elden Ring mod that replaces the default d-pad spell cycling with a radial wh
 
 ## Installation
 
-Download `RadialSpellMenu.zip` from the [latest GitHub release](https://github.com/LorenzoFerri/RadialSpellMenu/releases/latest). The same package is used on Linux/Proton and Windows.
+Download `RadialSpellMenu.zip` from the [latest GitHub release](https://github.com/LorenzoFerri/SpellRadialMenu/releases/latest). The same package is used on Linux/Proton and Windows.
 
 If there is no release yet, download the latest workflow artifact from the repository's **Actions** tab or build the DLL from source.
 
