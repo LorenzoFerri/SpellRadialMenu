@@ -12,6 +12,8 @@ namespace radial_spell_menu {
 
 inline void Log(const char* format, ...)
 {
+    static bool log_initialized = false;
+
     char buffer[1024] = {};
     va_list args;
     va_start(args, format);
@@ -34,9 +36,11 @@ inline void Log(const char* format, ...)
     if (sep) {
         *(sep + 1) = L'\0';
         swprintf(log_path, MAX_PATH, L"%lsRadialSpellMenu.log", module_path);
+        const DWORD disposition = log_initialized ? OPEN_ALWAYS : CREATE_ALWAYS;
         HANDLE file = CreateFileW(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                  nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                                  nullptr, disposition, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file != INVALID_HANDLE_VALUE) {
+            log_initialized = true;
             DWORD written = 0;
             DWORD len = static_cast<DWORD>(strnlen(buffer, sizeof(buffer)));
             WriteFile(file, buffer, len, &written, nullptr);

@@ -30,7 +30,7 @@ struct IconEntry {
 };
 
 struct Atlas {
-    const char* name = nullptr;
+    std::string name;
     ID3D12Resource* texture = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE gpu_srv{};
     float width = 1.0f;
@@ -40,17 +40,12 @@ struct Atlas {
 using OodleDecompressFn = long long(__stdcall *)(
     const void*, long long, void*, long long, int, int, int, void*, long long, void*, void*, void*, long long, int);
 
-std::array<Atlas, kMaxAtlases> g_atlases = {{
-    {"SB_Icon_02_A"},
-    {"SB_Icon_02_B"},
-    {"SB_Icon_07_dlc"},
-    {"SB_Icon_07_dlc_A"},
-    {"SB_Icon_08_dlc"},
-    {"SB_Icon_08_dlc_A"},
-}};
+std::array<Atlas, kMaxAtlases> g_atlases = {};
+std::size_t g_atlas_count = 0;
 std::unordered_map<std::uint32_t, IconEntry> g_icons;
 bool g_initialized = false;
 bool g_failed = false;
+const char* g_last_dflt_error = "";
 
 std::uint32_t ReadLe32(const std::vector<std::uint8_t>& bytes, std::size_t offset)
 {
@@ -97,6 +92,279 @@ bool DecompressDcxKrak(const std::vector<std::uint8_t>& dcx, std::vector<std::ui
         return false;
     }
     return true;
+}
+
+struct BitReader {
+    const std::uint8_t* data = nullptr;
+    std::size_t size = 0;
+    std::size_t bit_pos = 0;
+
+    bool ReadBits(int count, std::uint32_t& value)
+    {
+        value = 0;
+        if (count < 0 || bit_pos + static_cast<std::size_t>(count) > size * 8ull) return false;
+        for (int i = 0; i < count; ++i) {
+            value |= ((data[bit_pos >> 3] >> (bit_pos & 7)) & 1u) << i;
+            ++bit_pos;
+        }
+        return true;
+    }
+
+    bool AlignByte()
+    {
+        bit_pos = (bit_pos + 7u) & ~7ull;
+        return bit_pos <= size * 8ull;
+    }
+};
+
+std::uint32_t ReverseBits(std::uint32_t code, int length)
+{
+    std::uint32_t reversed = 0;
+    for (int i = 0; i < length; ++i) {
+        reversed = (reversed << 1) | (code & 1u);
+        code >>= 1;
+    }
+    return reversed;
+}
+
+struct HuffmanEntry {
+    std::uint16_t symbol = 0;
+    std::uint8_t bits = 0;
+};
+
+struct HuffmanTable {
+    int max_bits = 0;
+    std::vector<HuffmanEntry> entries;
+
+    bool Build(const std::vector<std::uint8_t>& lengths, int max_allowed_bits)
+    {
+        max_bits = max_allowed_bits;
+        entries.assign(1u << max_bits, {});
+
+        std::vector<std::uint16_t> count(static_cast<std::size_t>(max_bits + 1), 0);
+        for (std::uint8_t length : lengths) {
+            if (length > max_bits) return false;
+            if (length != 0) ++count[length];
+        }
+
+        std::vector<std::uint16_t> next_code(static_cast<std::size_t>(max_bits + 1), 0);
+        std::uint32_t code = 0;
+        for (int bits = 1; bits <= max_bits; ++bits) {
+            code = (code + count[bits - 1]) << 1;
+            next_code[bits] = static_cast<std::uint16_t>(code);
+        }
+
+        for (std::size_t symbol = 0; symbol < lengths.size(); ++symbol) {
+            const int length = lengths[symbol];
+            if (length == 0) continue;
+
+            const std::uint32_t canonical = next_code[length]++;
+            const std::uint32_t reversed = ReverseBits(canonical, length);
+            const std::uint32_t stride = 1u << length;
+            for (std::uint32_t i = reversed; i < entries.size(); i += stride) {
+                entries[i] = {static_cast<std::uint16_t>(symbol), static_cast<std::uint8_t>(length)};
+            }
+        }
+
+        return true;
+    }
+
+    bool Decode(BitReader& reader, std::uint16_t& symbol) const
+    {
+        std::uint32_t index = 0;
+        const std::size_t start = reader.bit_pos;
+        for (int bit = 0; bit < max_bits; ++bit) {
+            std::uint32_t value = 0;
+            if (!reader.ReadBits(1, value)) return false;
+            index |= value << bit;
+            const HuffmanEntry& entry = entries[index];
+            if (entry.bits == bit + 1) {
+                symbol = entry.symbol;
+                return true;
+            }
+        }
+        reader.bit_pos = start;
+        return false;
+    }
+};
+
+bool BuildFixedTables(HuffmanTable& litlen, HuffmanTable& dist)
+{
+    std::vector<std::uint8_t> lit_lengths(288, 0);
+    for (int i = 0; i <= 143; ++i) lit_lengths[i] = 8;
+    for (int i = 144; i <= 255; ++i) lit_lengths[i] = 9;
+    for (int i = 256; i <= 279; ++i) lit_lengths[i] = 7;
+    for (int i = 280; i <= 287; ++i) lit_lengths[i] = 8;
+
+    std::vector<std::uint8_t> dist_lengths(32, 5);
+    return litlen.Build(lit_lengths, 15) && dist.Build(dist_lengths, 15);
+}
+
+bool BuildDynamicTables(BitReader& reader, HuffmanTable& litlen, HuffmanTable& dist)
+{
+    std::uint32_t hlit = 0, hdist = 0, hclen = 0;
+    if (!reader.ReadBits(5, hlit) || !reader.ReadBits(5, hdist) || !reader.ReadBits(4, hclen)) return false;
+    hlit += 257;
+    hdist += 1;
+    hclen += 4;
+
+    static constexpr int kOrder[19] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
+    std::vector<std::uint8_t> code_lengths(19, 0);
+    for (std::uint32_t i = 0; i < hclen; ++i) {
+        std::uint32_t length = 0;
+        if (!reader.ReadBits(3, length)) return false;
+        code_lengths[kOrder[i]] = static_cast<std::uint8_t>(length);
+    }
+
+    HuffmanTable code_table;
+    if (!code_table.Build(code_lengths, 7)) return false;
+
+    std::vector<std::uint8_t> lengths(static_cast<std::size_t>(hlit + hdist), 0);
+    for (std::size_t i = 0; i < lengths.size();) {
+        std::uint16_t symbol = 0;
+        if (!code_table.Decode(reader, symbol)) return false;
+        if (symbol <= 15) {
+            lengths[i++] = static_cast<std::uint8_t>(symbol);
+        } else if (symbol == 16) {
+            if (i == 0) return false;
+            std::uint32_t repeat = 0;
+            if (!reader.ReadBits(2, repeat)) return false;
+            repeat += 3;
+            const std::uint8_t previous = lengths[i - 1];
+            while (repeat-- > 0 && i < lengths.size()) lengths[i++] = previous;
+        } else if (symbol == 17) {
+            std::uint32_t repeat = 0;
+            if (!reader.ReadBits(3, repeat)) return false;
+            repeat += 3;
+            while (repeat-- > 0 && i < lengths.size()) lengths[i++] = 0;
+        } else if (symbol == 18) {
+            std::uint32_t repeat = 0;
+            if (!reader.ReadBits(7, repeat)) return false;
+            repeat += 11;
+            while (repeat-- > 0 && i < lengths.size()) lengths[i++] = 0;
+        } else {
+            return false;
+        }
+    }
+
+    std::vector<std::uint8_t> lit_lengths(lengths.begin(), lengths.begin() + hlit);
+    std::vector<std::uint8_t> dist_lengths(lengths.begin() + hlit, lengths.end());
+    return litlen.Build(lit_lengths, 15) && dist.Build(dist_lengths, 15);
+}
+
+bool InflateBlock(BitReader& reader, const HuffmanTable& litlen, const HuffmanTable& dist, std::vector<std::uint8_t>& out)
+{
+    static constexpr int kLengthBase[29] = {
+        3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+        35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
+    };
+    static constexpr int kLengthExtra[29] = {
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+        3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+    };
+    static constexpr int kDistBase[30] = {
+        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129,
+        193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097,
+        6145, 8193, 12289, 16385, 24577,
+    };
+    static constexpr int kDistExtra[30] = {
+        0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6,
+        6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+    };
+
+    for (;;) {
+        std::uint16_t symbol = 0;
+        if (!litlen.Decode(reader, symbol)) return false;
+        if (symbol < 256) {
+            out.push_back(static_cast<std::uint8_t>(symbol));
+        } else if (symbol == 256) {
+            return true;
+        } else if (symbol <= 285) {
+            const int length_index = symbol - 257;
+            std::uint32_t extra = 0;
+            if (!reader.ReadBits(kLengthExtra[length_index], extra)) return false;
+            const std::size_t length = static_cast<std::size_t>(kLengthBase[length_index] + extra);
+
+            std::uint16_t dist_symbol = 0;
+            if (!dist.Decode(reader, dist_symbol) || dist_symbol >= 30) return false;
+            extra = 0;
+            if (!reader.ReadBits(kDistExtra[dist_symbol], extra)) return false;
+            const std::size_t distance = static_cast<std::size_t>(kDistBase[dist_symbol] + extra);
+            if (distance == 0 || distance > out.size()) return false;
+
+            for (std::size_t i = 0; i < length; ++i) {
+                out.push_back(out[out.size() - distance]);
+            }
+        } else {
+            return false;
+        }
+    }
+}
+
+bool InflateZlib(const std::uint8_t* data, std::size_t size, std::uint32_t raw_size, std::vector<std::uint8_t>& out)
+{
+    out.clear();
+    if (!data || size < 6) return false;
+    if ((data[0] & 0x0f) != 8) return false;
+    if ((((std::uint32_t)data[0] << 8) + data[1]) % 31u != 0) return false;
+
+    BitReader reader{data + 2, size - 6, 0};
+    bool final_block = false;
+    while (!final_block) {
+        std::uint32_t final = 0, type = 0;
+        if (!reader.ReadBits(1, final) || !reader.ReadBits(2, type)) return false;
+        final_block = final != 0;
+
+        if (type == 0) {
+            if (!reader.AlignByte()) return false;
+            if (reader.bit_pos / 8 + 4 > reader.size) return false;
+            const std::size_t pos = reader.bit_pos / 8;
+            const std::uint16_t len = std::uint16_t(reader.data[pos]) | (std::uint16_t(reader.data[pos + 1]) << 8);
+            const std::uint16_t nlen = std::uint16_t(reader.data[pos + 2]) | (std::uint16_t(reader.data[pos + 3]) << 8);
+            if ((len ^ 0xffffu) != nlen || pos + 4ull + len > reader.size) return false;
+            out.insert(out.end(), reader.data + pos + 4, reader.data + pos + 4 + len);
+            reader.bit_pos = (pos + 4ull + len) * 8ull;
+        } else if (type == 1 || type == 2) {
+            HuffmanTable litlen;
+            HuffmanTable dist;
+            const bool built = type == 1 ? BuildFixedTables(litlen, dist) : BuildDynamicTables(reader, litlen, dist);
+            if (!built || !InflateBlock(reader, litlen, dist, out)) return false;
+        } else {
+            return false;
+        }
+
+        if (out.size() > raw_size) return false;
+    }
+
+    return out.size() == raw_size;
+}
+
+bool DecompressDcxDflt(const std::vector<std::uint8_t>& dcx, std::vector<std::uint8_t>& out)
+{
+    g_last_dflt_error = "";
+    out.clear();
+    if (dcx.size() < 0x52 || !HasBytes(dcx, 0, "DCX\0") || !HasBytes(dcx, 0x28, "DFLT")) {
+        g_last_dflt_error = "not_dflt";
+        return false;
+    }
+
+    const std::uint32_t raw_size = ReadBe32(dcx, 0x1c);
+    const std::uint32_t comp_size = ReadBe32(dcx, 0x20);
+    if (comp_size <= 6 || 0x4cull + comp_size > dcx.size()) {
+        g_last_dflt_error = "bad_size";
+        return false;
+    }
+
+    if (!InflateZlib(dcx.data() + 0x4c, comp_size, raw_size, out)) {
+        g_last_dflt_error = "inflate_failed";
+        return false;
+    }
+    return true;
+}
+
+bool DecompressDcx(const std::vector<std::uint8_t>& dcx, std::vector<std::uint8_t>& out)
+{
+    return DecompressDcxKrak(dcx, out) || DecompressDcxDflt(dcx, out);
 }
 
 bool DecryptData0AesRanges(std::vector<std::uint8_t>& bytes)
@@ -168,7 +436,16 @@ std::string ReadTpfName(const std::vector<std::uint8_t>& tpf, std::uint32_t offs
     return name;
 }
 
-bool ExtractTpfTexture(const std::vector<std::uint8_t>& tpf, const char* target_name, std::vector<std::uint8_t>& dds)
+std::string StripExtension(std::string name)
+{
+    const std::size_t slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) name.erase(0, slash + 1);
+    const std::size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos) name.erase(dot);
+    return name;
+}
+
+bool ExtractTpfTexture(const std::vector<std::uint8_t>& tpf, const std::string& target_name, std::vector<std::uint8_t>& dds)
 {
     dds.clear();
     if (tpf.size() < 0x10 || !HasBytes(tpf, 0, "TPF\0")) return false;
@@ -185,7 +462,7 @@ bool ExtractTpfTexture(const std::vector<std::uint8_t>& tpf, const char* target_
         const std::uint32_t file_size = ReadLe32(tpf, entry + 4);
         const std::uint32_t name_offset = ReadLe32(tpf, entry + 12);
         if (file_offset > tpf.size() || file_size > tpf.size() - file_offset) continue;
-        if (ReadTpfName(tpf, name_offset, encoding) != target_name) continue;
+        if (StripExtension(ReadTpfName(tpf, name_offset, encoding)) != target_name) continue;
 
         dds.assign(tpf.begin() + file_offset, tpf.begin() + file_offset + file_size);
         return true;
@@ -202,15 +479,33 @@ int ReadXmlInt(const std::string& text, std::size_t line_start, const char* attr
     return std::atoi(text.c_str() + pos + needle.size());
 }
 
+std::size_t FindOrAddAtlas(std::string name)
+{
+    for (std::size_t i = 0; i < g_atlas_count; ++i) {
+        if (g_atlases[i].name == name) return i;
+    }
+    if (g_atlas_count >= g_atlases.size()) return g_atlases.size();
+
+    const std::size_t index = g_atlas_count++;
+    g_atlases[index].name = std::move(name);
+    return index;
+}
+
 void ParseLayouts(const std::vector<std::uint8_t>& bnd)
 {
     const std::string text(reinterpret_cast<const char*>(bnd.data()), bnd.size());
-    for (std::size_t atlas_index = 0; atlas_index < g_atlases.size(); ++atlas_index) {
-        const std::string marker = std::string("<TextureAtlas imagePath=\"") + g_atlases[atlas_index].name + ".png\">";
-        const std::size_t atlas = text.find(marker);
-        if (atlas == std::string::npos) continue;
+    constexpr const char* kAtlasMarker = "<TextureAtlas imagePath=\"";
+    std::size_t atlas = 0;
+    while ((atlas = text.find(kAtlasMarker, atlas)) != std::string::npos) {
+        const std::size_t image_begin = atlas + std::strlen(kAtlasMarker);
+        const std::size_t image_end = text.find('"', image_begin);
+        if (image_end == std::string::npos) break;
+
         const std::size_t atlas_end = text.find("</TextureAtlas>", atlas);
-        if (atlas_end == std::string::npos) continue;
+        if (atlas_end == std::string::npos) break;
+
+        const std::string atlas_name = StripExtension(text.substr(image_begin, image_end - image_begin));
+        std::size_t atlas_index = g_atlases.size();
 
         std::size_t pos = atlas;
         while ((pos = text.find("<SubTexture", pos)) != std::string::npos && pos < atlas_end) {
@@ -222,9 +517,14 @@ void ParseLayouts(const std::vector<std::uint8_t>& bnd)
             rect.y = static_cast<float>(ReadXmlInt(text, pos, "y"));
             rect.w = static_cast<float>(ReadXmlInt(text, pos, "width"));
             rect.h = static_cast<float>(ReadXmlInt(text, pos, "height"));
-            if (id != 0 && rect.w > 0.0f && rect.h > 0.0f) g_icons[id] = {atlas_index, rect};
+            if (id != 0 && rect.w > 0.0f && rect.h > 0.0f) {
+                if (atlas_index >= g_atlases.size()) atlas_index = FindOrAddAtlas(atlas_name);
+                if (atlas_index < g_atlases.size()) g_icons[id] = {atlas_index, rect};
+            }
             pos += 11;
         }
+
+        atlas = atlas_end + 15;
     }
 }
 
@@ -361,17 +661,19 @@ bool TryInitialize(
         const char* label;
     };
     constexpr Candidate candidates[] = {
+        {L"data0:/menu/hi/01_common.tpf.dcx", L"data0:/menu/hi/01_common.sblytbnd.dcx", true, "hi"},
         {L"data0:/menu/low/01_common.tpf.dcx", L"data0:/menu/low/01_common.sblytbnd.dcx", true, "low"},
         {L"data0:/menu/lo/01_common.tpf.dcx", L"data0:/menu/lo/01_common.sblytbnd.dcx", false, "lo"},
-        {L"data0:/menu/hi/01_common.tpf.dcx", L"data0:/menu/hi/01_common.sblytbnd.dcx", true, "hi"},
     };
 
     bool saw_assets = false;
     bool uploaded_any = false;
+    const char* selected_label = nullptr;
+    std::size_t selected_uploaded_count = 0;
     for (const Candidate& candidate : candidates) {
         std::vector<std::uint8_t> tpf_dcx;
         std::vector<std::uint8_t> sblyt_dcx;
-        if (!asset_reader::ReadFile(candidate.tpf_path, tpf_dcx, 96ull * 1024ull * 1024ull) ||
+        if (!asset_reader::ReadFile(candidate.tpf_path, tpf_dcx, 160ull * 1024ull * 1024ull) ||
             !asset_reader::ReadFile(candidate.layout_path, sblyt_dcx, 4ull * 1024ull * 1024ull)) {
             continue;
         }
@@ -386,21 +688,28 @@ bool TryInitialize(
 
         std::vector<std::uint8_t> tpf;
         std::vector<std::uint8_t> sblyt;
-        if (!DecompressDcxKrak(tpf_dcx, tpf) || !DecompressDcxKrak(sblyt_dcx, sblyt)) {
-            Log("Icon loader: failed to decompress %s icon assets.", candidate.label);
+        if (!DecompressDcx(tpf_dcx, tpf) || !DecompressDcx(sblyt_dcx, sblyt)) {
+            Log("Icon loader: failed to decompress %s icon assets (dflt=%s).",
+                candidate.label,
+                g_last_dflt_error);
             continue;
         }
 
         g_icons.clear();
+        g_atlas_count = 0;
         ParseLayouts(sblyt);
-        for (std::size_t i = 0; i < g_atlases.size(); ++i) {
+        std::size_t uploaded_count = 0;
+        for (std::size_t i = 0; i < g_atlas_count; ++i) {
             std::vector<std::uint8_t> dds;
             if (!ExtractTpfTexture(tpf, g_atlases[i].name, dds)) continue;
             if (UploadBc7Texture(device, queue, cpu_srvs[i], g_atlases[i], dds)) {
                 g_atlases[i].gpu_srv = gpu_srvs[i];
                 uploaded_any = true;
+                ++uploaded_count;
             }
         }
+        selected_label = candidate.label;
+        selected_uploaded_count = uploaded_count;
         break;
     }
 
@@ -412,6 +721,11 @@ bool TryInitialize(
     }
 
     g_initialized = true;
+    Log("Icon loader ready: source=%s icons=%zu atlases=%zu uploaded_atlases=%zu.",
+        selected_label ? selected_label : "unknown",
+        g_icons.size(),
+        g_atlas_count,
+        selected_uploaded_count);
     return true;
 }
 
@@ -420,11 +734,15 @@ radial_menu::IconTextureInfo Resolve(std::uint32_t icon_id)
     if (!g_initialized) return {};
 
     auto it = g_icons.find(icon_id);
-    if (it == g_icons.end()) it = g_icons.find(icon_id + 2000u);
+    std::uint32_t resolved_icon_id = icon_id;
+    if (it == g_icons.end()) {
+        resolved_icon_id = icon_id + 2000u;
+        it = g_icons.find(resolved_icon_id);
+    }
     if (it == g_icons.end()) return {};
 
     const IconEntry& entry = it->second;
-    if (entry.atlas_index >= g_atlases.size()) return {};
+    if (entry.atlas_index >= g_atlas_count) return {};
     const Atlas& atlas = g_atlases[entry.atlas_index];
     if (!atlas.gpu_srv.ptr) return {};
     const Rect& r = entry.rect;
@@ -435,11 +753,13 @@ void Shutdown()
 {
     for (Atlas& atlas : g_atlases) {
         SafeRelease(atlas.texture);
+        atlas.name.clear();
         atlas.gpu_srv = {};
         atlas.width = 1.0f;
         atlas.height = 1.0f;
     }
     g_icons.clear();
+    g_atlas_count = 0;
     g_initialized = false;
     g_failed = false;
 }

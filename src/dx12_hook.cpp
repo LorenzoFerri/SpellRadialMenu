@@ -118,7 +118,7 @@ static void Init(IDXGISwapChain3* sc)
     {
         D3D12_DESCRIPTOR_HEAP_DESC d{};
         d.Type  = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        d.NumDescriptors = 16;
+        d.NumDescriptors = 48;
         d.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(g_device->CreateDescriptorHeap(&d, IID_PPV_ARGS(&g_srv_heap))))
             { Log("Init: SRV heap failed"); return; }

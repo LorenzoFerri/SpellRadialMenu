@@ -45,18 +45,20 @@ constexpr std::array<bool, 14> kMsgRepositoryLookupMask = {
 constexpr std::uintptr_t kMagicParamOffset      = 0x478;
 constexpr std::uintptr_t kParamContainerStep1   = 0x80;
 constexpr std::uintptr_t kParamContainerStep2   = 0x80;
+constexpr std::uintptr_t kParamTypeNameOffset   = 0x10;
 constexpr std::uintptr_t kParamRowCountOffset   = 0x0A;
 constexpr std::uintptr_t kParamRowTableStart    = 0x40;
 constexpr std::uintptr_t kParamRowStride        = 0x18;
 constexpr std::uintptr_t kRowDescIdOffset       = 0x00;
 constexpr std::uintptr_t kRowDescDataOffset     = 0x08;
-constexpr std::uintptr_t kMagicIconIdOffset     = 0x14;
 constexpr std::uintptr_t kMagicReqIntOffset     = 0x22;
 constexpr std::uintptr_t kMagicReqFaithOffset   = 0x23;
 constexpr std::uintptr_t kGoodsIconIdOffset     = 0x30;
 constexpr std::uintptr_t kGoodsTypeOffset       = 0x3E;
 constexpr std::uint8_t   kGoodsTypeSorcery = 5;
 constexpr std::uint8_t   kGoodsTypeIncantation = 16;
+constexpr std::uint8_t   kGoodsTypeSpellTool = 17;
+constexpr std::uint8_t   kGoodsTypeSpellBuff = 18;
 
 constexpr unsigned int kGoodsNameCategory     = 0x0A;
 constexpr unsigned int kMagicNameCategory     = 0x0E;
@@ -80,6 +82,7 @@ bool                 g_logged_lookup_failure     = false;
 std::mutex                                    g_cache_mutex;
 std::unordered_map<std::uint32_t, std::string> g_name_cache;
 std::uintptr_t g_goods_param_offset = 0;
+bool g_logged_goods_fallback = false;
 
 const wchar_t* HookedMsgRepositoryLookup(void* repo, unsigned int version, unsigned int category, int msg_id);
 
@@ -131,14 +134,56 @@ bool IsReadablePointer(const void* ptr, std::size_t bytes)
     return begin >= region_begin && begin + bytes >= begin && begin + bytes <= region_end;
 }
 
+std::uintptr_t GetParamFileBase(std::uintptr_t repo, std::uintptr_t param_offset)
+{
+    if (!IsReadablePointer(reinterpret_cast<const void*>(repo + param_offset), sizeof(std::uintptr_t))) return 0;
+    const auto holder = *reinterpret_cast<const std::uintptr_t*>(repo + param_offset);
+    if (!holder || !IsReadablePointer(reinterpret_cast<const void*>(holder + kParamContainerStep1), sizeof(std::uintptr_t))) return 0;
+    const auto container = *reinterpret_cast<const std::uintptr_t*>(holder + kParamContainerStep1);
+    if (!container || !IsReadablePointer(reinterpret_cast<const void*>(container + kParamContainerStep2), sizeof(std::uintptr_t))) return 0;
+    const auto base = *reinterpret_cast<const std::uintptr_t*>(container + kParamContainerStep2);
+    return base;
+}
+
+std::string ReadParamTypeName(std::uintptr_t base)
+{
+    if (!base || !IsReadablePointer(reinterpret_cast<const void*>(base + kParamTypeNameOffset), sizeof(std::int32_t))) return {};
+
+    const auto type_name_offset = *reinterpret_cast<const std::int32_t*>(base + kParamTypeNameOffset);
+    if (type_name_offset <= 0 || type_name_offset > 1024 * 1024) return {};
+
+    const char* text = reinterpret_cast<const char*>(base + static_cast<std::uintptr_t>(type_name_offset));
+    if (!IsReadablePointer(text, 1)) return {};
+
+    std::string result;
+    for (std::size_t i = 0; i < 96 && IsReadablePointer(text + i, 1); ++i) {
+        if (text[i] == '\0') break;
+        if (text[i] < 32 || text[i] > 126) return {};
+        result.push_back(text[i]);
+    }
+    return result;
+}
+
+std::uintptr_t LocateEquipParamGoodsOffset(std::uintptr_t repo)
+{
+    if (g_goods_param_offset) return g_goods_param_offset;
+
+    for (std::uintptr_t offset = 0; offset < 0x1000; offset += sizeof(void*)) {
+        if (offset == kMagicParamOffset) continue;
+
+        const std::uintptr_t base = GetParamFileBase(repo, offset);
+        if (ReadParamTypeName(base) == "EQUIP_PARAM_GOODS_ST") {
+            g_goods_param_offset = offset;
+            return offset;
+        }
+    }
+
+    return 0;
+}
+
 const std::uint8_t* FindParamRowData(std::uintptr_t repo, std::uintptr_t param_offset, std::uint32_t row_id)
 {
-    if (!IsReadablePointer(reinterpret_cast<const void*>(repo + param_offset), sizeof(std::uintptr_t))) return nullptr;
-    const auto holder = *reinterpret_cast<const std::uintptr_t*>(repo + param_offset);
-    if (!holder || !IsReadablePointer(reinterpret_cast<const void*>(holder + kParamContainerStep1), sizeof(std::uintptr_t))) return nullptr;
-    const auto container = *reinterpret_cast<const std::uintptr_t*>(holder + kParamContainerStep1);
-    if (!container || !IsReadablePointer(reinterpret_cast<const void*>(container + kParamContainerStep2), sizeof(std::uintptr_t))) return nullptr;
-    const auto base = *reinterpret_cast<const std::uintptr_t*>(container + kParamContainerStep2);
+    const auto base = GetParamFileBase(repo, param_offset);
     if (!base || !IsReadablePointer(reinterpret_cast<const void*>(base + kParamRowCountOffset), sizeof(std::uint16_t))) return nullptr;
 
     const auto row_count = *reinterpret_cast<const std::uint16_t*>(base + kParamRowCountOffset);
@@ -160,27 +205,38 @@ const std::uint8_t* FindParamRowData(std::uintptr_t repo, std::uintptr_t param_o
 
 std::uint32_t ReadGoodsIconId(std::uintptr_t repo, std::uint32_t spell_id)
 {
-    auto read_from_offset = [&](std::uintptr_t offset) -> std::uint32_t {
-        const std::uint8_t* data = FindParamRowData(repo, offset, spell_id);
-        if (!data || (data[kGoodsTypeOffset] != kGoodsTypeSorcery && data[kGoodsTypeOffset] != kGoodsTypeIncantation)) return 0;
-        const auto icon_id = *reinterpret_cast<const std::uint16_t*>(data + kGoodsIconIdOffset);
-        return icon_id != 0 ? static_cast<std::uint32_t>(icon_id) : 0;
-    };
+    std::uintptr_t offset = LocateEquipParamGoodsOffset(repo);
+    if (!offset) {
+        for (std::uintptr_t candidate = 0; candidate < 0x1000; candidate += sizeof(void*)) {
+            if (candidate == kMagicParamOffset) continue;
+            const std::uint8_t* row = FindParamRowData(repo, candidate, spell_id);
+            if (!row) continue;
 
-    if (g_goods_param_offset) {
-        if (const std::uint32_t icon_id = read_from_offset(g_goods_param_offset)) return icon_id;
-    }
+            const std::uint8_t goods_type = row[kGoodsTypeOffset];
+            if (goods_type != kGoodsTypeSorcery &&
+                goods_type != kGoodsTypeIncantation &&
+                goods_type != kGoodsTypeSpellTool &&
+                goods_type != kGoodsTypeSpellBuff) continue;
 
-    for (std::uintptr_t offset = 0; offset < 0x1000; offset += sizeof(void*)) {
-        if (offset == kMagicParamOffset) continue;
-        const std::uint32_t icon_id = read_from_offset(offset);
-        if (icon_id != 0) {
-            g_goods_param_offset = offset;
-            return icon_id;
+            const auto icon_id = *reinterpret_cast<const std::uint16_t*>(row + kGoodsIconIdOffset);
+            if (icon_id == 0) continue;
+
+            offset = candidate;
+            g_goods_param_offset = candidate;
+            if (!g_logged_goods_fallback) {
+                Log("Spell metadata: located EquipParamGoods by spell goods row fallback.");
+                g_logged_goods_fallback = true;
+            }
+            break;
         }
     }
+    if (!offset) return 0;
 
-    return 0;
+    const std::uint8_t* data = FindParamRowData(repo, offset, spell_id);
+    if (!data) return 0;
+
+    const auto icon_id = *reinterpret_cast<const std::uint16_t*>(data + kGoodsIconIdOffset);
+    return icon_id != 0 ? static_cast<std::uint32_t>(icon_id) : 0;
 }
 
 MsgRepositoryLookupFn GetMsgLookup()
@@ -253,8 +309,6 @@ RuntimeMagicMetadata ReadRuntimeMagicMetadata(std::uint32_t spell_id)
     if (data) {
 
         RuntimeMagicMetadata meta{};
-        const auto icon16 = *reinterpret_cast<const std::int16_t*>(data + kMagicIconIdOffset);
-        meta.icon_id = icon16 > 0 ? static_cast<std::uint32_t>(icon16) : 0;
         if (const std::uint32_t goods_icon_id = ReadGoodsIconId(repo, spell_id)) {
             meta.icon_id = goods_icon_id;
         }

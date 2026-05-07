@@ -6,7 +6,7 @@
 
 namespace radial_spell_menu::icon_loader {
 
-constexpr std::size_t kMaxAtlases = 6;
+constexpr std::size_t kMaxAtlases = 32;
 
 bool TryInitialize(
     ID3D12Device* device,
