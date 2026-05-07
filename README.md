@@ -2,12 +2,14 @@
 
 An Elden Ring mod that replaces the default d-pad spell cycling with a radial wheel for selecting memorized spells. Loaded via [ModEngine 3 (me3)](https://github.com/soulsmods/ModEngine2).
 
+![RadialSpellMenu screenshot](Screenshot.png)
+
 ## Features
 
 - **Radial wheel** — hold D-pad Up to open, use the right stick to select a spell, release to confirm
 - **Spell names and categories** — reads live from the game's param/message repositories at runtime; no data files needed
 - **Category colour coding** — sorceries in blue, incantations in gold
-- **Current spell indicator** — a pip highlights the slot that is already active
+- **Selection highlight** — the currently selected spell arc is highlighted with a coloured border
 - **Embedded font** — the Elden Ring UI font is baked into the DLL; no external assets required
 
 ## Controls
@@ -23,9 +25,104 @@ An Elden Ring mod that replaces the default d-pad spell cycling with a radial wh
 
 - Elden Ring (Steam)
 - [ModEngine 3](https://github.com/soulsmods/ModEngine2) installed and configured
-- Linux host with `cmake`, `ninja`, `git`, `curl` available for building
+- A controller using XInput
+
+## Installation
+
+Download `RadialSpellMenu.zip` from the [latest GitHub release](https://github.com/LorenzoFerri/RadialSpellMenu/releases/latest). The same package is used on Linux/Proton and Windows.
+
+If there is no release yet, download the latest workflow artifact from the repository's **Actions** tab or build the DLL from source.
+
+The zip contains:
+
+```text
+RadialSpellMenu/
+  RadialSpellMenu.dll
+  RadialSpellMenuProfile.me3
+```
+
+### Linux / Steam Deck / Bazzite
+
+1. Extract `RadialSpellMenu.zip` anywhere you keep ModEngine profiles.
+2. Launch the included profile through ModEngine 3:
+
+```bash
+me3 launch --profile "/path/to/RadialSpellMenu/RadialSpellMenuProfile.me3"
+```
+
+The included profile loads the DLL from the same folder:
+
+```toml
+[[natives]]
+path = 'RadialSpellMenu.dll'
+optional = false
+load_early = false
+```
+
+For ERR or another modpack, you can either use the included profile as a reference or copy both files into the same folder used by that setup. If you add it to an existing profile, use this native entry:
+
+```toml
+[[natives]]
+path = 'RadialSpellMenu.dll'
+optional = false
+load_early = false
+```
+
+The important part is still that the DLL and profile path match, and that `load_early = false` is kept.
+
+### Windows
+
+1. Extract `RadialSpellMenu.zip` anywhere you keep ModEngine profiles.
+2. Launch Elden Ring through your usual ModEngine 3 launcher using `RadialSpellMenuProfile.me3`.
+
+The included profile loads the DLL from the same folder:
+
+```toml
+[[natives]]
+path = 'RadialSpellMenu.dll'
+optional = false
+load_early = false
+```
+
+For ERR or another modpack, you can copy both files into the same folder used by that setup, or add the native entry to an existing profile. If the DLL is beside the profile, use:
+
+```toml
+[[natives]]
+path = 'RadialSpellMenu.dll'
+optional = false
+load_early = false
+```
+
+Do not load this DLL through old-style `external_dlls` entries if your setup also supports `[[natives]]`. This mod hooks D3D12 and must be loaded after the game renderer exists.
+
+> **`load_early = false` is required.** The DLL hooks into an already-running D3D12 swap chain; it must not load before the game's renderer is initialised.
+
+### Logs
+
+The mod writes `RadialSpellMenu.log` next to `RadialSpellMenu.dll`.
+
+Useful startup lines look like this:
+
+```text
+Spell manager initialized ...
+Installed XInputGetState hook ...
+Hooks installed
+Initialization completed.
+Command queue captured
+ImGui ready
+```
+
+`Icon loader ready ...` appears the first time the radial menu opens, not necessarily at game launch.
+
+If the game freezes or the menu does not appear, check this log first and include the last few lines when reporting the issue.
 
 ## Building
+
+Building is only needed if you want to compile the DLL yourself. End users can use the release zip.
+
+GitHub Actions builds `RadialSpellMenu.zip` automatically for pushes, pull requests, manual workflow runs, and published releases. Pushing a version tag like `v1.0.0` creates a GitHub release with the zip attached; publishing a release manually also attaches the zip.
+
+On Linux, install `cmake`, `ninja`, `git`, and `curl`, then run:
 
 ```bash
 git clone <this-repo> RadialSpellMenu
@@ -37,29 +134,9 @@ bash build.sh
 1. Clones `imgui` and `minhook` into `vendor/`
 2. Detects or installs a mingw-w64 / llvm-mingw cross-compiler
 3. Configures and builds with CMake + Ninja
-4. Copies the resulting `RadialSpellMenu.dll` to `natives/` and, if present, to `~/ERRv2.2.4.4/dll/offline/`
+4. Copies the resulting `RadialSpellMenu.dll` to `natives/`
 
 The output DLL is at `natives/RadialSpellMenu.dll`.
-
-## Installation
-
-1. Copy `natives/RadialSpellMenu.dll` next to your me3 profile
-2. Add it to your me3 profile:
-
-```toml
-[[natives]]
-path = 'natives/RadialSpellMenu.dll'
-optional = false
-load_early = false
-```
-
-> **`load_early = false` is required.** The DLL hooks into an already-running D3D12 swap chain; it must not load before the game's renderer is initialised.
-
-Launch via me3:
-
-```bash
-me3 launch --profile "/path/to/myprofile.me3"
-```
 
 ## Project Structure
 

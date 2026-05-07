@@ -94,4 +94,4 @@ cmake -S "${PROJECT_ROOT}" -B "${BUILD_DIR}" -G Ninja \
 cmake --build "${BUILD_DIR}" --config Release
 
 printf '\nBuilt DLL:\n  %s/natives/RadialSpellMenu.dll\n' "${PROJECT_ROOT}"
-printf '\nLaunch with me3:\n  me3 launch --profile "%s/myprofile.me3"\n' "${PROJECT_ROOT}"
+printf '\nLaunch with me3:\n  me3 launch --profile "%s/RadialSpellMenuProfile.me3"\n' "${PROJECT_ROOT}"

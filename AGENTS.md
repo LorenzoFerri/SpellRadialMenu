@@ -21,7 +21,7 @@ The project cross-compiles a Windows DLL on Linux using mingw-w64 or llvm-mingw.
 There is no automated test suite. The only way to verify behaviour is to build and run the mod in-game via:
 
 ```bash
-me3 launch --profile "/home/faith/RadialSpellMenu/myprofile.me3"
+me3 launch --profile "./RadialSpellMenuProfile.me3"
 ```
 
 Log output goes to `RadialSpellMenu.log` next to the DLL. Check this file for errors from `Log()` calls. The log is also written to the debug output stream, visible in tools like DebugView on Windows.

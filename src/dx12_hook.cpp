@@ -171,7 +171,6 @@ static void Init(IDXGISwapChain3* sc)
     ImGui_ImplDX12_Init(&info);
 
     g_old_wndproc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, (LONG_PTR)HookedWndProc);
-    TryInitializeIcons();
     g_ready = true;
     Log("ImGui ready");
 }
@@ -181,6 +180,10 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* sc, UINT sync, U
 {
     if (!g_ready) {
         if (g_queue) Init(sc);
+        return g_orig_present(sc, sync, flags);
+    }
+
+    if (!radial_menu::IsOpen()) {
         return g_orig_present(sc, sync, flags);
     }
 

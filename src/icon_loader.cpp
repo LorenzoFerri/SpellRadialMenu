@@ -622,7 +622,16 @@ bool UploadBc7Texture(
     queue->Signal(fence, 1);
     if (fence->GetCompletedValue() < 1) {
         fence->SetEventOnCompletion(1, event);
-        WaitForSingleObject(event, INFINITE);
+        const DWORD wait = WaitForSingleObject(event, 2000);
+        if (wait != WAIT_OBJECT_0) {
+            Log("Icon loader: timed out waiting for texture upload fence.");
+            CloseHandle(event);
+            SafeRelease(fence);
+            SafeRelease(list);
+            SafeRelease(allocator);
+            SafeRelease(upload);
+            return false;
+        }
     }
     CloseHandle(event);
     SafeRelease(fence);

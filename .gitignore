@@ -6,6 +6,7 @@ natives/*.pdb
 # Bundled binary toolchain and tools (too large for git)
 toolchains/
 tools/
+vendor/Smithbox/
 
 # Logs
 *.log
@@ -16,9 +17,6 @@ CMakeFiles/
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json
-
-# me3 profile may contain local paths — opt-in manually if desired
-# myprofile.me3
 
 # Windows artifacts
 *.suo

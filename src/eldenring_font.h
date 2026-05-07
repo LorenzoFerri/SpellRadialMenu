@@ -1,5 +1,4 @@
-// File: '/home/faith/ERRv2.2.4.4/dll/offline/eldenring.ttf' (934420 bytes)
-// Exported using binary_to_compressed_c.exe -u8 "/home/faith/ERRv2.2.4.4/dll/offline/eldenring.ttf" EldenRingFont
+// Embedded Elden Ring UI font, exported using ImGui's binary_to_compressed_c tool.
 static const unsigned int EldenRingFont_compressed_size = 548057;
 static const unsigned char EldenRingFont_compressed_data[548057] =
 {
@@ -9194,4 +9193,3 @@ static const unsigned char EldenRingFont_compressed_data[548057] =
     41,43,10,8,4,4,2,3,6,1,1,2,4,6,5,9,12,12,254,167,15,10,41,22,3,20,19,5,20,49,17,4,8,2,130,24,47,255,255,0,48,255,215,3,171,2,43,2,6,10,217,0,0,16,127,101,5,13,8,34,255,255,0,35,254,
     227,2,170,1,165,2,6,3,244,0,0,255,255,255,236,254,225,0,166,1,178,2,6,3,166,0,0,0,0,0,5,250,242,108,84,134,
 };
-
