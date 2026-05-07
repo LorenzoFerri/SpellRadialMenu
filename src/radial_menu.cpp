@@ -17,7 +17,6 @@ constexpr float kWheelOuterRadius = 248.0f;
 constexpr float kWheelIconRadius = 182.0f;
 constexpr float kCenterPanelRadius = 102.0f;
 constexpr float kSegmentGapRadians = 0.028f;
-constexpr float kSelectedInset = 6.0f;
 
 bool g_is_open = false;
 int g_selected_slot = -1;
@@ -219,30 +218,18 @@ ImU32 GetCategoryColor(const SpellSlot& slot, bool is_selected)
     }
 }
 
-void DrawSpellBadge(ImDrawList* draw_list, ImFont* font, float base_font_size, const ImVec2& center, const SpellSlot& slot, bool is_selected, float scale)
+void DrawSpellBadge(ImDrawList* draw_list, const ImVec2& center, const SpellSlot& slot, float scale)
 {
     if (g_icon_texture_resolver != nullptr && slot.icon_id != 0) {
         const IconTextureInfo icon = g_icon_texture_resolver(slot.icon_id);
         if (icon.texture != ImTextureID{}) {
-            const float half_extent = (is_selected ? 44.0f : 40.0f) * scale;
+            const float half_extent = 40.0f * scale;
             const float vertical_offset = 4.0f * scale;
             const ImVec2 image_min = {center.x - half_extent, center.y - half_extent - vertical_offset};
             const ImVec2 image_max = {center.x + half_extent, center.y + half_extent - vertical_offset};
             draw_list->AddImageRounded(icon.texture, image_min, image_max, icon.uv_min, icon.uv_max, IM_COL32_WHITE, 10.0f * scale);
-            return;
         }
     }
-
-    // No game icon yet: tiny category dot only (no frame / crosshair-style placeholder art).
-    const ImU32 rgb = GetCategoryColor(slot, is_selected);
-    const int a = is_selected ? 200 : 120;
-    const ImU32 dot_color = (rgb & 0x00FFFFFFu) | (static_cast<ImU32>(a) << 24);
-    const ImVec2 dot_center = {center.x, center.y - (2.0f * scale)};
-    const float dot_radius = (is_selected ? 5.5f : 4.5f) * scale;
-    draw_list->AddCircleFilled(dot_center, dot_radius, dot_color, 20);
-
-    (void)font;
-    (void)base_font_size;
 }
 
 }  // namespace
@@ -330,7 +317,6 @@ void Draw(const std::vector<SpellSlot>& slots)
     const float wheel_outer_radius = kWheelOuterRadius * ui_scale;
     const float wheel_icon_radius = kWheelIconRadius * ui_scale;
     const float center_panel_radius = kCenterPanelRadius * ui_scale;
-    const float selected_inset = kSelectedInset * ui_scale;
     const float overlay_shadow_radius = wheel_outer_radius + (22.0f * ui_scale);
     const float outer_frame_radius = wheel_outer_radius + (8.0f * ui_scale);
 
@@ -348,27 +334,22 @@ void Draw(const std::vector<SpellSlot>& slots)
         const bool is_selected = static_cast<int>(i) == g_selected_slot;
         const float start_angle = (-kPi * 0.5f) + (step * static_cast<float>(i)) + kSegmentGapRadians;
         const float end_angle = (-kPi * 0.5f) + (step * static_cast<float>(i + 1)) - kSegmentGapRadians;
-        const float inner_radius = is_selected ? (wheel_inner_radius - (2.0f * ui_scale)) : wheel_inner_radius;
-        const float outer_radius = is_selected ? (wheel_outer_radius - selected_inset) : wheel_outer_radius;
+        const float inner_radius = wheel_inner_radius;
+        const float outer_radius = wheel_outer_radius;
         const float mid_angle = (start_angle + end_angle) * 0.5f;
-        const ImVec2 icon_center = PolarPoint(center, mid_angle, wheel_icon_radius - (is_selected ? (4.0f * ui_scale) : 0.0f));
+        const ImVec2 icon_center = PolarPoint(center, mid_angle, wheel_icon_radius);
 
-        const ImU32 fill = is_selected ? IM_COL32(150, 240, 255, 84) : IM_COL32(24, 22, 19, 224);
-        const ImU32 border = is_selected ? IM_COL32(196, 237, 242, 230) : IM_COL32(110, 95, 65, 170);
-        AddRingSegment(draw_list, center, inner_radius, outer_radius, start_angle, end_angle, fill, border, (is_selected ? 2.5f : 1.25f) * ui_scale);
+        const ImU32 fill = is_selected ? IM_COL32(40, 36, 30, 232) : IM_COL32(24, 22, 19, 224);
+        const ImU32 border = is_selected ? GetCategoryColor(slots[i], true) : IM_COL32(110, 95, 65, 170);
+        const float border_thickness = (is_selected ? 3.5f : 1.25f) * ui_scale;
+        AddRingSegment(draw_list, center, inner_radius, outer_radius, start_angle, end_angle, fill, border, border_thickness);
 
-        const ImU32 inner_trim = is_selected ? IM_COL32(205, 244, 248, 180) : IM_COL32(146, 124, 84, 120);
-        const ImU32 outer_trim = is_selected ? IM_COL32(180, 225, 230, 130) : IM_COL32(120, 102, 72, 110);
+        const ImU32 inner_trim = is_selected ? GetCategoryColor(slots[i], false) : IM_COL32(146, 124, 84, 120);
+        const ImU32 outer_trim = is_selected ? GetCategoryColor(slots[i], false) : IM_COL32(120, 102, 72, 110);
         AddArcStroke(draw_list, center, wheel_inner_radius + (8.0f * ui_scale), start_angle + 0.03f, end_angle - 0.03f, inner_trim, 1.0f * ui_scale);
         AddArcStroke(draw_list, center, wheel_outer_radius - (16.0f * ui_scale), start_angle + 0.05f, end_angle - 0.05f, outer_trim, 1.0f * ui_scale);
 
-        DrawSpellBadge(draw_list, font, base_font_size, icon_center, slots[i], is_selected, ui_scale);
-
-        if (slots[i].is_current) {
-            const ImVec2 pip_center = PolarPoint(center, mid_angle, wheel_inner_radius + (18.0f * ui_scale));
-            draw_list->AddCircleFilled(pip_center, 5.0f * ui_scale, IM_COL32(122, 214, 255, 230), 16);
-            draw_list->AddCircle(pip_center, 8.0f * ui_scale, IM_COL32(122, 214, 255, 120), 16, 1.0f * ui_scale);
-        }
+        DrawSpellBadge(draw_list, icon_center, slots[i], ui_scale);
     }
 
     for (std::size_t i = 0; i < slot_count; ++i) {
