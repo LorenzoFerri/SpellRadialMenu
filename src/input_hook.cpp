@@ -45,6 +45,7 @@ struct ControllerContext {
 };
 
 std::array<ControllerContext, kControllerCount> g_controllers = {};
+std::vector<SpellSlot> g_open_spell_slots;
 XInputGetStateFn g_original_xinput_get_state = nullptr;
 LPVOID g_xinput_target = nullptr;
 std::uintptr_t g_cs_fe_man_static_address = 0;
@@ -509,9 +510,9 @@ DWORD WINAPI HookedXInputGetState(DWORD user_index, XINPUT_STATE* state)
     if (controller.dpad_up_down && physical_dpad_up_pressed && !controller.radial_opened &&
         (now - controller.pressed_at) >= kHoldThresholdMs) {
         controller.radial_opened = true;
-        const auto spell_slots = GetMemorizedSpells();
+        g_open_spell_slots = GetMemorizedSpells();
         int initial_selection = GetCurrentSpellSlot();
-        if (initial_selection < 0 && !spell_slots.empty()) {
+        if (initial_selection < 0 && !g_open_spell_slots.empty()) {
             initial_selection = 0;
         }
 
@@ -520,11 +521,10 @@ DWORD WINAPI HookedXInputGetState(DWORD user_index, XINPUT_STATE* state)
     }
 
     if (controller.radial_opened) {
-        const auto spell_slots = GetMemorizedSpells();
         const float right_x = NormalizeThumbAxis(state->Gamepad.sThumbRX, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
         const float right_y = NormalizeThumbAxis(state->Gamepad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
 
-        radial_spell_menu::radial_menu::UpdateSelectionFromStick(right_x, right_y, spell_slots.size());
+        radial_spell_menu::radial_menu::UpdateSelectionFromStick(right_x, right_y, g_open_spell_slots.size());
 
         state->Gamepad.sThumbRX = 0;
         state->Gamepad.sThumbRY = 0;
@@ -533,11 +533,10 @@ DWORD WINAPI HookedXInputGetState(DWORD user_index, XINPUT_STATE* state)
     if (controller.dpad_up_down && !physical_dpad_up_pressed) {
         if (controller.radial_opened) {
             const int selected_slot = radial_spell_menu::radial_menu::GetSelectedSlot();
-            const auto spell_slots = GetMemorizedSpells();
 
-            if (selected_slot >= 0 && selected_slot < static_cast<int>(spell_slots.size())) {
+            if (selected_slot >= 0 && selected_slot < static_cast<int>(g_open_spell_slots.size())) {
                 const std::size_t selected_index = static_cast<std::size_t>(selected_slot);
-                if (!SwitchToSpellSlot(spell_slots[selected_index].slot_index)) {
+                if (!SwitchToSpellSlot(g_open_spell_slots[selected_index].slot_index)) {
                     QueueQuickSelectSequence(controller, now, static_cast<std::uint32_t>(selected_index));
                     Log("Queued quick-select plus %u follow-up taps for spell selection.",
                         static_cast<unsigned int>(selected_index));
@@ -545,6 +544,7 @@ DWORD WINAPI HookedXInputGetState(DWORD user_index, XINPUT_STATE* state)
             }
 
             radial_spell_menu::radial_menu::Close();
+            g_open_spell_slots.clear();
             Log("Closed radial spell menu for controller %lu.", static_cast<unsigned long>(user_index));
         } else {
             QueueTapSequence(controller, now, 1);
@@ -621,6 +621,7 @@ void Shutdown()
     MH_RemoveHook(g_xinput_target);
     radial_spell_menu::radial_menu::Close();
     g_controllers = {};
+    g_open_spell_slots.clear();
     g_xinput_target = nullptr;
     g_original_xinput_get_state = nullptr;
 }
@@ -628,6 +629,11 @@ void Shutdown()
 bool IsMenuOpen()
 {
     return radial_spell_menu::radial_menu::IsOpen();
+}
+
+const std::vector<SpellSlot>& GetOpenSpellSlots()
+{
+    return g_open_spell_slots;
 }
 
 }  // namespace radial_spell_menu::input_hook

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 
 namespace radial_spell_menu {
 
@@ -79,8 +80,8 @@ MsgRepositoryLookupFn g_direct_msg_lookup        = nullptr;
 bool                 g_hook_attempted            = false;
 bool                 g_logged_lookup_failure     = false;
 
-std::mutex                                    g_cache_mutex;
-std::unordered_map<std::uint32_t, std::string> g_name_cache;
+std::mutex g_cache_mutex;
+std::unordered_map<std::uint32_t, ResolvedSpellMetadata> g_metadata_cache;
 std::uintptr_t g_goods_param_offset = 0;
 bool g_logged_goods_fallback = false;
 
@@ -334,9 +335,8 @@ ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id)
 {
     {
         std::lock_guard lock(g_cache_mutex);
-        if (const auto it = g_name_cache.find(spell_id); it != g_name_cache.end()) {
-            return { it->second, ReadRuntimeMagicMetadata(spell_id).icon_id,
-                     ReadRuntimeMagicMetadata(spell_id).category };
+        if (const auto it = g_metadata_cache.find(spell_id); it != g_metadata_cache.end()) {
+            return it->second;
         }
     }
 
@@ -348,10 +348,16 @@ ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id)
         name = buf;
     }
 
-    std::lock_guard lock(g_cache_mutex);
-    g_name_cache[spell_id] = name;
+    ResolvedSpellMetadata metadata{
+        .name = std::move(name),
+        .icon_id = runtime.icon_id,
+        .category = runtime.category,
+    };
 
-    return { name, runtime.icon_id, runtime.category };
+    std::lock_guard lock(g_cache_mutex);
+    g_metadata_cache[spell_id] = metadata;
+
+    return metadata;
 }
 
 }  // namespace radial_spell_menu

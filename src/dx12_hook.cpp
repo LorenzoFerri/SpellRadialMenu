@@ -2,8 +2,8 @@
 #include "asset_reader.h"
 #include "common.h"
 #include "icon_loader.h"
+#include "input_hook.h"
 #include "radial_menu.h"
-#include "spell_manager.h"
 #include "eldenring_font.h"
 
 #include <MinHook.h>
@@ -210,7 +210,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* sc, UINT sync, U
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    radial_menu::Draw(GetMemorizedSpells());
+    radial_menu::Draw(input_hook::GetOpenSpellSlots());
 
     ImGui::Render();
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_cmdlist);

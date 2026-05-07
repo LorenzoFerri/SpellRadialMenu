@@ -479,6 +479,24 @@ int ReadXmlInt(const std::string& text, std::size_t line_start, const char* attr
     return std::atoi(text.c_str() + pos + needle.size());
 }
 
+std::uint32_t ParseIconId(const std::string& text, std::size_t name_pos)
+{
+    constexpr std::size_t kIconPrefixLen = 14; // MENU_ItemIcon_
+    std::size_t pos = name_pos + kIconPrefixLen;
+    std::uint32_t id = 0;
+    bool saw_digit = false;
+
+    while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+        saw_digit = true;
+        id = (id * 10u) + static_cast<std::uint32_t>(text[pos] - '0');
+        ++pos;
+    }
+
+    // Ignore disabled/log variants like MENU_ItemIcon_06000d.png.
+    if (!saw_digit || pos >= text.size() || text[pos] != '.') return 0;
+    return id;
+}
+
 std::size_t FindOrAddAtlas(std::string name)
 {
     for (std::size_t i = 0; i < g_atlas_count; ++i) {
@@ -511,7 +529,7 @@ void ParseLayouts(const std::vector<std::uint8_t>& bnd)
         while ((pos = text.find("<SubTexture", pos)) != std::string::npos && pos < atlas_end) {
             const std::size_t name = text.find("MENU_ItemIcon_", pos);
             if (name == std::string::npos || name > atlas_end) break;
-            const std::uint32_t id = static_cast<std::uint32_t>(std::atoi(text.c_str() + name + 14));
+            const std::uint32_t id = ParseIconId(text, name);
             Rect rect{};
             rect.x = static_cast<float>(ReadXmlInt(text, pos, "x"));
             rect.y = static_cast<float>(ReadXmlInt(text, pos, "y"));
@@ -670,9 +688,9 @@ bool TryInitialize(
         const char* label;
     };
     constexpr Candidate candidates[] = {
-        {L"data0:/menu/hi/01_common.tpf.dcx", L"data0:/menu/hi/01_common.sblytbnd.dcx", true, "hi"},
         {L"data0:/menu/low/01_common.tpf.dcx", L"data0:/menu/low/01_common.sblytbnd.dcx", true, "low"},
         {L"data0:/menu/lo/01_common.tpf.dcx", L"data0:/menu/lo/01_common.sblytbnd.dcx", false, "lo"},
+        {L"data0:/menu/hi/01_common.tpf.dcx", L"data0:/menu/hi/01_common.sblytbnd.dcx", true, "hi"},
     };
 
     bool saw_assets = false;
