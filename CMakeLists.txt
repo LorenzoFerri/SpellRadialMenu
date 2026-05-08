@@ -61,8 +61,6 @@ set(RSM_RENDER_SOURCES
     src/render/assets/dcx.h
     src/render/assets/icon_assets.cpp
     src/render/assets/icon_assets.h
-    src/render/assets/loose_asset_reader.cpp
-    src/render/assets/loose_asset_reader.h
     src/render/d3d/d3d_texture_upload.cpp
     src/render/d3d/d3d_texture_upload.h
     src/render/d3d/dx12_hook.cpp
@@ -78,6 +76,10 @@ set(RSM_RENDER_SOURCES
     src/render/ui/radial_menu_draw.h
     src/render/vfs/asset_reader.cpp
     src/render/vfs/asset_reader.h
+    src/render/vfs/game_vfs.cpp
+    src/render/vfs/game_vfs.h
+    src/render/vfs/path_utils.cpp
+    src/render/vfs/path_utils.h
 )
 
 set(RSM_VENDOR_SOURCES

@@ -36,6 +36,7 @@ bool g_failed = false;
 bool g_logged_begin = false;
 bool g_logged_missing_assets = false;
 bool g_logged_waiting_for_vfs_context = false;
+int g_logged_missing_icon_ids = 0;
 
 void ResetLoadedIconState()
 {
@@ -91,7 +92,6 @@ bool TryInitialize(
     };
     constexpr Candidate candidates[] = {
         {L"data0:/menu/low/01_common.tpf.dcx", L"data0:/menu/low/01_common.sblytbnd.dcx", true, "low"},
-        {L"data0:/menu/lo/01_common.tpf.dcx", L"data0:/menu/lo/01_common.sblytbnd.dcx", false, "lo"},
         {L"data0:/menu/hi/01_common.tpf.dcx", L"data0:/menu/hi/01_common.sblytbnd.dcx", true, "hi"},
     };
 
@@ -154,7 +154,6 @@ bool TryInitialize(
             layout_icons.size(),
             g_icons.size(),
             g_atlas_count);
-
         std::size_t uploaded_count = 0;
         std::size_t missing_texture_count = 0;
         std::size_t upload_failure_count = 0;
@@ -210,14 +209,14 @@ bool TryInitialize(
     if (!saw_assets) {
         if (asset_reader::IsHookInstalled() && !asset_reader::HasGameReadContext()) {
             if (!g_logged_waiting_for_vfs_context) {
-                Log("Icon loader: waiting for game VFS read context; loose fallback did not provide icon archives.");
+                Log("Icon loader: waiting for game VFS read context and cached icon archives.");
                 g_logged_waiting_for_vfs_context = true;
             }
             return false;
         }
 
         if (!g_logged_missing_assets) {
-            Log("Icon loader: no icon archives found from VFS or loose mod fallback.");
+            Log("Icon loader: no cached game VFS icon archives available yet.");
             g_logged_missing_assets = true;
         }
         return false;
@@ -244,13 +243,29 @@ radial_menu::IconTextureInfo Resolve(std::uint32_t icon_id)
 
     auto it = g_icons.find(icon_id);
     if (it == g_icons.end()) {
+        if (g_logged_missing_icon_ids < 32) {
+            Log("Icon loader: missing icon id %u in loaded icon layout.", icon_id);
+            ++g_logged_missing_icon_ids;
+        }
         return {};
     }
 
     const IconEntry& entry = it->second;
-    if (entry.atlas_index >= g_atlas_count) return {};
+    if (entry.atlas_index >= g_atlas_count) {
+        if (g_logged_missing_icon_ids < 32) {
+            Log("Icon loader: icon id %u references unloaded atlas index %zu.", icon_id, entry.atlas_index);
+            ++g_logged_missing_icon_ids;
+        }
+        return {};
+    }
     const Atlas& atlas = g_atlases[entry.atlas_index];
-    if (!atlas.gpu_srv.ptr) return {};
+    if (!atlas.gpu_srv.ptr) {
+        if (g_logged_missing_icon_ids < 32) {
+            Log("Icon loader: icon id %u atlas '%s' has no uploaded SRV.", icon_id, atlas.name.c_str());
+            ++g_logged_missing_icon_ids;
+        }
+        return {};
+    }
     const icon_assets::Rect& r = entry.rect;
     return {(ImTextureID)atlas.gpu_srv.ptr, {r.x / atlas.width, r.y / atlas.height}, {(r.x + r.w) / atlas.width, (r.y + r.h) / atlas.height}};
 }

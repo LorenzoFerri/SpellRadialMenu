@@ -1,8 +1,8 @@
 #include "render/vfs/asset_reader.h"
 
 #include "core/common.h"
-#include "render/assets/loose_asset_reader.h"
-
+#include "render/vfs/game_vfs.h"
+#include "render/vfs/path_utils.h"
 #include <MinHook.h>
 #include <windows.h>
 
@@ -10,74 +10,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace radial_menu_mod::asset_reader {
 namespace {
 
-template <typename T>
-struct DlVector2015 {
-    void* alloc = nullptr;
-    T* first = nullptr;
-    T* last = nullptr;
-    T* end = nullptr;
-};
-
-struct DlUtf16String2015 {
-    void* alloc = nullptr;
-    union {
-        wchar_t small[8];
-        wchar_t* ptr;
-    } storage = {};
-    std::size_t len = 0;
-    std::size_t cap = 7;
-    std::uint8_t encoding = 1;
-};
-
-struct DlDevice;
-using DlDeviceOpenFn = void* (*)(DlDevice*, DlUtf16String2015*, const wchar_t*, void*, void*, bool);
-
-struct DlDeviceVtable {
-    void* dtor = nullptr;
-    DlDeviceOpenFn open_file = nullptr;
-};
-
-struct DlDevice {
-    DlDeviceVtable* vtable = nullptr;
-};
-
-struct DlVirtualRoot {
-    DlUtf16String2015 root;
-    DlUtf16String2015 expanded;
-};
-
-struct DlVirtualMount {
-    DlUtf16String2015 root;
-    DlDevice* device = nullptr;
-    std::size_t size = 0;
-};
-
-struct DlDeviceManager2015 {
-    DlVector2015<DlDevice*> devices;
-    DlVector2015<void*> spis;
-    DlDevice* disk_device = nullptr;
-    DlVector2015<DlVirtualRoot> virtual_roots;
-    DlVector2015<DlVirtualMount> bnd3_mounts;
-    DlVector2015<DlVirtualMount> bnd4_mounts;
-    void* bnd3_spi = nullptr;
-    void* bnd4_spi = nullptr;
-    void* mutex_vtable = nullptr;
-};
-
-struct SectionRange {
-    std::uintptr_t begin = 0;
-    std::uintptr_t end = 0;
-
-    bool Contains(std::uintptr_t value, std::size_t size = 1) const
-    {
-        return value >= begin && value + size >= value && value + size <= end;
-    }
+struct VirtualRootPath {
+    std::wstring root;
+    std::wstring expanded;
 };
 
 DlDeviceOpenFn g_orig_open_file = nullptr;
@@ -87,119 +31,175 @@ DlDevice* g_disk_device = nullptr;
 void* g_captured_container = nullptr;
 void* g_captured_allocator = nullptr;
 bool g_captured_temp_flag = false;
-bool g_logged_missing_context = false;
-bool g_logged_vfs_read_attempt = false;
-bool g_logged_vfs_open_result = false;
-bool g_logged_vfs_read_result = false;
+bool g_logged_waiting_for_cache = false;
+bool g_logged_direct_read_attempt = false;
+bool g_logged_direct_read_result = false;
+void* g_read_file_target = nullptr;
+DlFileReadFn g_orig_read_file = nullptr;
+std::mutex g_cache_mutex;
+std::unordered_map<void*, std::wstring> g_pending_reads;
+std::unordered_map<std::wstring, std::vector<std::uint8_t>> g_cached_files;
+std::vector<VirtualRootPath> g_virtual_roots;
+bool g_logged_virtual_roots = false;
+int g_logged_virtual_root_details = 0;
+bool g_logged_virtual_mounts = false;
+bool g_logged_memory_root_read = false;
+bool g_logged_memory_root_miss = false;
+bool g_logged_loader_filesystem_read = false;
+bool g_logged_loader_filesystem_miss = false;
+bool g_logged_mounted_vfs_attempt = false;
+bool g_logged_mounted_vfs_read = false;
 
-bool GetSectionRange(const char* name, SectionRange& range)
+bool IsIconAssetPath(const std::wstring& path);
+
+bool Data0IconPathToRelativePath(const wchar_t* path, std::wstring& relative)
 {
-    const auto base = GetModuleBase();
-    if (!base) return false;
+    const std::wstring normalized = NormalizePath(path);
+    constexpr const wchar_t* prefix = L"data0:/";
+    if (!StartsWithPath(normalized, prefix) || !IsIconAssetPath(normalized)) return false;
 
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
-    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+    relative = normalized.substr(7);
+    for (wchar_t& ch : relative) {
+        if (ch == L'/') ch = L'\\';
+    }
+    return true;
+}
 
-    const auto* section = IMAGE_FIRST_SECTION(nt);
-    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
-        char section_name[9] = {};
-        std::copy_n(reinterpret_cast<const char*>(section->Name), 8, section_name);
-        if (std::strcmp(section_name, name) != 0) continue;
+bool ReadThroughLoaderFilesystem(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64_t max_size)
+{
+    std::wstring relative;
+    if (!Data0IconPathToRelativePath(path, relative)) return false;
 
-        range.begin = base + section->VirtualAddress;
-        range.end = range.begin + section->Misc.VirtualSize;
-        return range.end > range.begin;
+    if (ReadDiskFile(relative, bytes, max_size)) {
+        if (!g_logged_loader_filesystem_read) {
+            Log("Asset reader: read icon asset through loader filesystem override.");
+            g_logged_loader_filesystem_read = true;
+        }
+        return true;
     }
 
+    wchar_t cwd[MAX_PATH] = {};
+    if (GetCurrentDirectoryW(MAX_PATH, cwd)) {
+        const std::wstring cwd_relative = JoinDiskPath(cwd, relative);
+        if (ReadDiskFile(cwd_relative, bytes, max_size)) {
+            if (!g_logged_loader_filesystem_read) {
+                Log("Asset reader: read icon asset through loader filesystem override.");
+                g_logged_loader_filesystem_read = true;
+            }
+            return true;
+        }
+    }
+
+    if (!g_logged_loader_filesystem_miss) {
+        Log("Asset reader: loader filesystem override did not resolve requested icon asset.");
+        g_logged_loader_filesystem_miss = true;
+    }
     return false;
 }
 
-bool IsExecutableAddress(std::uintptr_t value)
+void CaptureVirtualRoots(const DlDeviceManager2015& manager)
 {
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (value == 0 || VirtualQuery(reinterpret_cast<void*>(value), &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) || (mbi.Protect & PAGE_NOACCESS)) return false;
+    if (!g_virtual_roots.empty()) return;
+    const std::size_t count = VectorLen(manager.virtual_roots);
+    if (count == 0 || !IsReadableMemory(manager.virtual_roots.first, count * sizeof(DlVirtualRoot))) return;
 
-    const DWORD protect = mbi.Protect & 0xFFu;
-    return protect == PAGE_EXECUTE || protect == PAGE_EXECUTE_READ ||
-           protect == PAGE_EXECUTE_READWRITE || protect == PAGE_EXECUTE_WRITECOPY;
-}
+    for (const DlVirtualRoot* it = manager.virtual_roots.first; it != manager.virtual_roots.last; ++it) {
+        std::wstring root = NormalizePath(ReadDlString(it->root).c_str());
+        std::wstring expanded = ReadDlString(it->expanded);
+        if (root.empty() || expanded.empty()) continue;
+        g_virtual_roots.push_back({std::move(root), std::move(expanded)});
+    }
 
-template <typename T>
-bool LooksLikeVector(const DlVector2015<T>& vector, const SectionRange& data)
-{
-    const auto first = reinterpret_cast<std::uintptr_t>(vector.first);
-    const auto last = reinterpret_cast<std::uintptr_t>(vector.last);
-    const auto end = reinterpret_cast<std::uintptr_t>(vector.end);
-
-    if (reinterpret_cast<std::uintptr_t>(vector.alloc) % alignof(void*) != 0) return false;
-    if (first % alignof(T*) != 0 || last % alignof(T*) != 0 || end % alignof(T*) != 0) return false;
-    if (first > last || last > end) return false;
-    if (first == 0 && last == 0 && end == 0) return true;
-    if (first == 0 || last == 0 || end == 0) return false;
-
-    return data.Contains(first) || (end - first) < (64ull * 1024ull * 1024ull);
-}
-
-template <typename T>
-std::size_t VectorLen(const DlVector2015<T>& vector)
-{
-    if (!vector.first || !vector.last || vector.last < vector.first) return 0;
-    const auto len = static_cast<std::size_t>(vector.last - vector.first);
-    return len < 100000 ? len : 0;
-}
-
-bool VerifyDeviceManager(const DlDeviceManager2015* manager, const SectionRange& data, const SectionRange& rdata)
-{
-    if (!manager || reinterpret_cast<std::uintptr_t>(manager) % alignof(DlDeviceManager2015) != 0) return false;
-    if (!data.Contains(reinterpret_cast<std::uintptr_t>(manager), sizeof(DlDeviceManager2015))) return false;
-    if (!LooksLikeVector(manager->devices, data)) return false;
-    if (!LooksLikeVector(manager->spis, data)) return false;
-    if (!LooksLikeVector(manager->virtual_roots, data)) return false;
-    if (!LooksLikeVector(manager->bnd3_mounts, data)) return false;
-    if (!LooksLikeVector(manager->bnd4_mounts, data)) return false;
-    if (VectorLen(manager->devices) == 0 || VectorLen(manager->devices) > 512) return false;
-    if (VectorLen(manager->virtual_roots) == 0 || VectorLen(manager->virtual_roots) > 128) return false;
-
-    if (!manager->bnd3_spi || !manager->bnd4_spi) return false;
-    const auto mutex_vtable = reinterpret_cast<std::uintptr_t>(manager->mutex_vtable);
-    if (mutex_vtable % alignof(void*) != 0 || !rdata.Contains(mutex_vtable, sizeof(void*))) return false;
-
-    const auto disk = reinterpret_cast<std::uintptr_t>(manager->disk_device);
-    if (disk % alignof(DlDevice) != 0 || !data.Contains(disk, sizeof(DlDevice))) return false;
-
-    bool disk_in_devices = false;
-    if (IsReadableMemory(manager->devices.first, VectorLen(manager->devices) * sizeof(DlDevice*))) {
-        for (auto* it = manager->devices.first; it != manager->devices.last; ++it) {
-            if (*it == manager->disk_device) {
-                disk_in_devices = true;
-                break;
+    if (!g_logged_virtual_roots) {
+        Log("Asset reader: captured %zu game VFS virtual roots.", g_virtual_roots.size());
+        for (const VirtualRootPath& entry : g_virtual_roots) {
+            if (g_logged_virtual_root_details >= 24) break;
+            if (entry.root.find(L"data") == std::wstring::npos &&
+                entry.root.find(L"menu") == std::wstring::npos &&
+                entry.expanded.find(L"menu") == std::wstring::npos &&
+                entry.expanded.find(L"mod") == std::wstring::npos) {
+                continue;
             }
+            Log("Asset reader: VFS root '%ls' -> '%ls'.", entry.root.c_str(), entry.expanded.c_str());
+            ++g_logged_virtual_root_details;
+        }
+        g_logged_virtual_roots = true;
+    }
+}
+
+void LogVirtualMounts(const char* label, const DlVector2015<DlVirtualMount>& mounts)
+{
+    const std::size_t count = VectorLen(mounts);
+    Log("Asset reader: %s mount count=%zu readable=%d.",
+        label,
+        count,
+        static_cast<int>(count != 0 && IsReadableMemory(mounts.first, count * sizeof(DlVirtualMount))));
+    if (count == 0 || !IsReadableMemory(mounts.first, count * sizeof(DlVirtualMount))) return;
+
+    int logged = 0;
+    for (const DlVirtualMount* it = mounts.first; it != mounts.last && logged < 32; ++it) {
+        const std::wstring root = NormalizePath(ReadDlString(it->root).c_str());
+        Log("Asset reader: %s mount root='%ls' device=%p size=%zu.", label, root.c_str(), it->device, it->size);
+        ++logged;
+    }
+}
+
+void LogMountedRoots(const DlDeviceManager2015& manager)
+{
+    if (g_logged_virtual_mounts) return;
+    LogVirtualMounts("bnd3", manager.bnd3_mounts);
+    LogVirtualMounts("bnd4", manager.bnd4_mounts);
+    g_logged_virtual_mounts = true;
+}
+
+bool ReadFromMemoryVirtualRoot(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64_t max_size)
+{
+    const std::wstring normalized_path = NormalizePath(path);
+    for (const VirtualRootPath& root : g_virtual_roots) {
+        if (!StartsWithPath(normalized_path, root.root)) continue;
+
+        std::wstring relative = normalized_path.substr(root.root.size());
+        const std::wstring disk_path = JoinDiskPath(root.expanded, std::move(relative));
+        if (ReadDiskFile(disk_path, bytes, max_size)) {
+            if (!g_logged_memory_root_read) {
+                Log("Asset reader: read Data0 asset through game VFS root mapping.");
+                g_logged_memory_root_read = true;
+            }
+            return true;
         }
     }
-    if (!disk_in_devices) return false;
 
-    const auto vtable = reinterpret_cast<std::uintptr_t>(manager->disk_device->vtable);
-    if (vtable % alignof(void*) != 0 || !rdata.Contains(vtable, sizeof(DlDeviceVtable))) return false;
-
-    const auto open = reinterpret_cast<std::uintptr_t>(manager->disk_device->vtable->open_file);
-    return open >= GetModuleBase() && open < GetModuleBase() + GetModuleSize();
+    if (!g_logged_memory_root_miss && !g_virtual_roots.empty()) {
+        Log("Asset reader: game VFS root mappings did not contain the requested Data0 asset on disk.");
+        g_logged_memory_root_miss = true;
+    }
+    return false;
 }
 
-DlDeviceManager2015* LocateDeviceManager()
+bool IsIconAssetPath(const std::wstring& path)
 {
-    SectionRange data{};
-    SectionRange rdata{};
-    if (!GetSectionRange(".data", data) || !GetSectionRange(".rdata", rdata)) return nullptr;
+    return path == L"data0:/menu/low/01_common.tpf.dcx" ||
+        path == L"data0:/menu/low/01_common.sblytbnd.dcx" ||
+        path == L"data0:/menu/lo/01_common.tpf.dcx" ||
+        path == L"data0:/menu/lo/01_common.sblytbnd.dcx" ||
+        path == L"data0:/menu/hi/01_common.tpf.dcx" ||
+        path == L"data0:/menu/hi/01_common.sblytbnd.dcx";
+}
 
-    for (auto cursor = data.begin; cursor + sizeof(void*) <= data.end; cursor += sizeof(void*)) {
-        const auto candidate = *reinterpret_cast<DlDeviceManager2015**>(cursor);
-        if (VerifyDeviceManager(candidate, data, rdata)) return candidate;
-    }
+bool AllowsDirectRead(const wchar_t* path)
+{
+    const std::wstring normalized = NormalizePath(path);
+    return normalized == L"data0:/menu/low/01_common.tpf.dcx" ||
+        normalized == L"data0:/menu/low/01_common.sblytbnd.dcx";
+}
 
-    return nullptr;
+bool TryGetCachedFile(const wchar_t* path, std::vector<std::uint8_t>& bytes)
+{
+    std::lock_guard lock(g_cache_mutex);
+    const auto it = g_cached_files.find(NormalizePath(path));
+    if (it == g_cached_files.end()) return false;
+    bytes = it->second;
+    return true;
 }
 
 DlUtf16String2015 MakeDlString(std::wstring& storage)
@@ -218,6 +218,171 @@ DlUtf16String2015 MakeDlString(std::wstring& storage)
     return value;
 }
 
+int HookedReadFile(void* file_operator, void* buffer, std::uint64_t size)
+{
+    const int read = g_orig_read_file ? g_orig_read_file(file_operator, buffer, size) : 0;
+    if (read <= 0 || !buffer) return read;
+
+    std::wstring path;
+    {
+        std::lock_guard lock(g_cache_mutex);
+        const auto it = g_pending_reads.find(file_operator);
+        if (it == g_pending_reads.end()) return read;
+        path = it->second;
+        g_pending_reads.erase(it);
+    }
+
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(read));
+    std::memcpy(bytes.data(), buffer, bytes.size());
+    {
+        std::lock_guard lock(g_cache_mutex);
+        g_cached_files[path] = std::move(bytes);
+    }
+    Log("Asset reader: cached game VFS read for %ls (%d bytes).", path.c_str(), read);
+    return read;
+}
+
+void TryInstallReadHook(void* file_operator)
+{
+    if (g_read_file_target || !file_operator || !IsReadableMemory(file_operator, sizeof(std::uintptr_t) * 14)) return;
+
+    const auto* words = reinterpret_cast<const std::uintptr_t*>(file_operator);
+    const auto* vtable = reinterpret_cast<const std::uintptr_t*>(words[0]);
+    if (!IsReadableMemory(vtable, sizeof(std::uintptr_t) * 26) || !IsExecutableAddress(vtable[25])) return;
+
+    g_read_file_target = reinterpret_cast<void*>(vtable[25]);
+    const MH_STATUS create = MH_CreateHook(g_read_file_target, reinterpret_cast<void*>(&HookedReadFile),
+        reinterpret_cast<void**>(&g_orig_read_file));
+    if (create != MH_OK) {
+        Log("Asset reader: read hook creation failed (%d).", static_cast<int>(create));
+        g_read_file_target = nullptr;
+        return;
+    }
+
+    const MH_STATUS enable = MH_EnableHook(g_read_file_target);
+    if (enable != MH_OK) {
+        Log("Asset reader: read hook enable failed (%d).", static_cast<int>(enable));
+        MH_RemoveHook(g_read_file_target);
+        g_read_file_target = nullptr;
+        g_orig_read_file = nullptr;
+        return;
+    }
+    Log("Asset reader: installed game VFS read cache hook.");
+}
+
+bool ReadOpenedFile(void* file_operator, std::vector<std::uint8_t>& bytes, std::uint64_t max_size)
+{
+    if (!file_operator || !IsReadableMemory(file_operator, sizeof(std::uintptr_t) * 14)) return false;
+
+    const auto* words = reinterpret_cast<const std::uintptr_t*>(file_operator);
+    const auto* vtable = reinterpret_cast<const std::uintptr_t*>(words[0]);
+    const std::uint64_t size = words[13];
+    if (size == 0 || size > max_size || !IsReadableMemory(vtable, sizeof(std::uintptr_t) * 26) || !IsExecutableAddress(vtable[25])) {
+        return false;
+    }
+
+    bytes.resize(static_cast<std::size_t>(size));
+    const auto read_file = g_orig_read_file && g_read_file_target == reinterpret_cast<void*>(vtable[25])
+        ? g_orig_read_file
+        : reinterpret_cast<DlFileReadFn>(vtable[25]);
+    const int read = read_file(file_operator, bytes.data(), bytes.size());
+    if (!g_logged_direct_read_result) {
+        Log("Asset reader: direct game VFS read returned %d for %llu bytes.",
+            read,
+            static_cast<unsigned long long>(size));
+        g_logged_direct_read_result = true;
+    }
+    if (read <= 0) {
+        bytes.clear();
+        return false;
+    }
+
+    bytes.resize(static_cast<std::size_t>(read));
+    return true;
+}
+
+DlDevice* FindMountedVfsDevice(const std::wstring& path)
+{
+    const std::size_t root_end = path.find(L":/");
+    if (root_end == std::wstring::npos) return nullptr;
+    const std::wstring root = path.substr(0, root_end);
+
+    const DlDeviceManager2015* manager = LocateDeviceManager();
+    if (!manager) return nullptr;
+
+    const std::size_t count = VectorLen(manager->bnd4_mounts);
+    if (count == 0 || !IsReadableMemory(manager->bnd4_mounts.first, count * sizeof(DlVirtualMount))) return nullptr;
+
+    for (const DlVirtualMount* it = manager->bnd4_mounts.first; it != manager->bnd4_mounts.last; ++it) {
+        if (NormalizePath(ReadDlString(it->root).c_str()) != root) continue;
+        if (!it->device || !IsReadableMemory(it->device, sizeof(DlDevice))) return nullptr;
+        if (!it->device->vtable || !IsReadableMemory(it->device->vtable, sizeof(DlDeviceVtable))) return nullptr;
+        if (!IsExecutableAddress(reinterpret_cast<std::uintptr_t>(it->device->vtable->open_file))) return nullptr;
+        return it->device;
+    }
+
+    return nullptr;
+}
+
+bool ReadFileFromMountedVfs(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64_t max_size)
+{
+    if (!g_captured_container || !g_captured_allocator) return false;
+
+    const std::wstring normalized = NormalizePath(path);
+    if (!IsIconAssetPath(normalized)) return false;
+
+    DlDevice* device = FindMountedVfsDevice(normalized);
+    if (!device) return false;
+
+    std::wstring storage(path);
+    DlUtf16String2015 dl_path = MakeDlString(storage);
+    if (!g_logged_mounted_vfs_attempt) {
+        Log("Asset reader: attempting mounted game VFS read for %ls.", path);
+        g_logged_mounted_vfs_attempt = true;
+    }
+
+    void* file_operator = device->vtable->open_file(
+        device,
+        &dl_path,
+        storage.c_str(),
+        g_captured_container,
+        g_captured_allocator,
+        g_captured_temp_flag);
+    if (!file_operator) return false;
+
+    TryInstallReadHook(file_operator);
+    if (!ReadOpenedFile(file_operator, bytes, max_size)) return false;
+
+    if (!g_logged_mounted_vfs_read) {
+        Log("Asset reader: read icon asset through mounted game VFS.");
+        g_logged_mounted_vfs_read = true;
+    }
+    return true;
+}
+
+bool ReadFileDirect(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64_t max_size)
+{
+    if (!g_disk_device || !g_orig_open_file || !g_captured_container || !g_captured_allocator) return false;
+
+    std::wstring storage(path);
+    DlUtf16String2015 dl_path = MakeDlString(storage);
+    if (!g_logged_direct_read_attempt) {
+        Log("Asset reader: attempting direct game VFS read for %ls.", path);
+        g_logged_direct_read_attempt = true;
+    }
+
+    void* file_operator = g_orig_open_file(
+        g_disk_device,
+        &dl_path,
+        storage.c_str(),
+        g_captured_container,
+        g_captured_allocator,
+        g_captured_temp_flag);
+    if (!file_operator) return false;
+    TryInstallReadHook(file_operator);
+    return ReadOpenedFile(file_operator, bytes, max_size);
+}
+
 void* HookedOpenFile(DlDevice* device, DlUtf16String2015* path, const wchar_t* path_cstr, void* container, void* allocator, bool is_temp_file)
 {
     if (container && allocator && !g_captured_container) {
@@ -228,7 +393,17 @@ void* HookedOpenFile(DlDevice* device, DlUtf16String2015* path, const wchar_t* p
         Log("Asset reader: captured game VFS read context.");
     }
 
-    return g_orig_open_file ? g_orig_open_file(device, path, path_cstr, container, allocator, is_temp_file) : nullptr;
+    void* file_operator = g_orig_open_file ? g_orig_open_file(device, path, path_cstr, container, allocator, is_temp_file) : nullptr;
+    const std::wstring normalized_path = NormalizePath(path_cstr);
+    if (file_operator && IsIconAssetPath(normalized_path)) {
+        {
+            std::lock_guard lock(g_cache_mutex);
+            g_pending_reads[file_operator] = normalized_path;
+        }
+        TryInstallReadHook(file_operator);
+        Log("Asset reader: tracking game VFS icon asset %ls.", normalized_path.c_str());
+    }
+    return file_operator;
 }
 
 }  // namespace
@@ -237,68 +412,18 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
 {
     bytes.clear();
     if (!path) return false;
-    if (loose_asset_reader::ReadFile(path, bytes, max_size)) return true;
+    if (TryGetCachedFile(path, bytes)) return true;
+    if (ReadFromMemoryVirtualRoot(path, bytes, max_size)) return true;
+    if (ReadThroughLoaderFilesystem(path, bytes, max_size)) return true;
+    if (ReadFileFromMountedVfs(path, bytes, max_size)) return true;
+    if (!AllowsDirectRead(path)) return false;
+    if (ReadFileDirect(path, bytes, max_size)) return true;
 
-    if (!g_disk_device || !g_orig_open_file || !g_captured_container || !g_captured_allocator) {
-        if (g_open_file_target && !g_logged_missing_context) {
-            Log("Asset reader: game VFS hook is installed but read context is not captured yet; using loose fallback.");
-            g_logged_missing_context = true;
-        }
-        return false;
+    if (g_open_file_target && !g_logged_waiting_for_cache) {
+        Log("Asset reader: waiting for game VFS context or cached Data0 paths.");
+        g_logged_waiting_for_cache = true;
     }
-
-    std::wstring storage(path);
-    DlUtf16String2015 dl_path = MakeDlString(storage);
-    if (!g_logged_vfs_read_attempt) {
-        Log("Asset reader: attempting game VFS read for %ls.", path);
-        g_logged_vfs_read_attempt = true;
-    }
-
-    void* file_operator = g_orig_open_file(
-        g_disk_device,
-        &dl_path,
-        storage.c_str(),
-        g_captured_container,
-        g_captured_allocator,
-        g_captured_temp_flag);
-
-    if (!g_logged_vfs_open_result) {
-        Log("Asset reader: game VFS open returned %p for %ls.", file_operator, path);
-        g_logged_vfs_open_result = true;
-    }
-
-    if (!file_operator || !IsReadableMemory(file_operator, sizeof(std::uintptr_t) * 14)) return false;
-
-    const auto* words = reinterpret_cast<const std::uintptr_t*>(file_operator);
-    const auto* vtable = reinterpret_cast<const std::uintptr_t*>(words[0]);
-    const std::uint64_t size = words[13];
-    if (size == 0 || size > max_size || !IsReadableMemory(vtable, sizeof(std::uintptr_t) * 26) || !IsExecutableAddress(vtable[25])) {
-        Log("Asset reader: game VFS file operator invalid (size=%llu vtable=%p read_fn=%p); using loose fallback.",
-            static_cast<unsigned long long>(size),
-            vtable,
-            vtable && IsReadableMemory(vtable, sizeof(std::uintptr_t) * 26) ? reinterpret_cast<void*>(vtable[25]) : nullptr);
-        return false;
-    }
-
-    using ReadFn = int (*)(void*, void*, std::uint64_t);
-    bytes.resize(static_cast<std::size_t>(size));
-    if (!g_logged_vfs_read_result) {
-        Log("Asset reader: calling game VFS read function %p for %llu bytes.",
-            reinterpret_cast<void*>(vtable[25]),
-            static_cast<unsigned long long>(size));
-    }
-    const int read = reinterpret_cast<ReadFn>(vtable[25])(file_operator, bytes.data(), bytes.size());
-    if (!g_logged_vfs_read_result) {
-        Log("Asset reader: game VFS read returned %d.", read);
-        g_logged_vfs_read_result = true;
-    }
-    if (read <= 0) {
-        bytes.clear();
-        return false;
-    }
-
-    bytes.resize(static_cast<std::size_t>(read));
-    return true;
+    return false;
 }
 
 bool Install()
@@ -313,6 +438,9 @@ bool Install()
         }
         return false;
     }
+
+    CaptureVirtualRoots(*manager);
+    LogMountedRoots(*manager);
 
     g_disk_device = manager->disk_device;
     g_open_file_target = reinterpret_cast<void*>(manager->disk_device->vtable->open_file);
@@ -350,6 +478,12 @@ bool HasGameReadContext()
 
 void Shutdown()
 {
+    if (g_read_file_target) {
+        MH_DisableHook(g_read_file_target);
+        MH_RemoveHook(g_read_file_target);
+        g_read_file_target = nullptr;
+        g_orig_read_file = nullptr;
+    }
     if (!g_open_file_target) return;
     MH_DisableHook(g_open_file_target);
     MH_RemoveHook(g_open_file_target);
@@ -357,7 +491,14 @@ void Shutdown()
     g_orig_open_file = nullptr;
     g_captured_container = nullptr;
     g_captured_allocator = nullptr;
-    g_logged_missing_context = false;
+    g_captured_temp_flag = false;
+    g_logged_waiting_for_cache = false;
+    g_logged_memory_root_read = false;
+    g_logged_memory_root_miss = false;
+    std::lock_guard lock(g_cache_mutex);
+    g_pending_reads.clear();
+    g_cached_files.clear();
+    g_virtual_roots.clear();
 }
 
 }  // namespace radial_menu_mod::asset_reader
