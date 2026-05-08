@@ -17,6 +17,7 @@ constexpr ULONGLONG kTapReleaseMs = 90;
 constexpr WORD kSpellButton = XINPUT_GAMEPAD_DPAD_UP;
 constexpr WORD kItemButton = XINPUT_GAMEPAD_DPAD_DOWN;
 constexpr DWORD kControllerCount = 4;
+constexpr float kMouseSelectionScale = 1.0f / 90.0f;
 
 enum class RadialKind {
     none,
@@ -41,7 +42,17 @@ struct ControllerContext {
     ULONGLONG synthetic_phase_until = 0;
 };
 
+struct KeyboardMouseContext {
+    bool trigger_down = false;
+    bool radial_opened = false;
+    RadialKind active_kind = RadialKind::none;
+    ULONGLONG pressed_at = 0;
+    float selection_x = 0.0f;
+    float selection_y = 0.0f;
+};
+
 std::array<ControllerContext, kControllerCount> g_controllers = {};
+KeyboardMouseContext g_keyboard_mouse = {};
 std::vector<SpellSlot> g_open_spell_slots;
 RadialKind g_open_kind = RadialKind::none;
 
@@ -116,6 +127,16 @@ void ResetTriggerState(ControllerContext& controller)
     controller.active_kind = RadialKind::none;
 }
 
+void ResetTriggerState(KeyboardMouseContext& input)
+{
+    input.trigger_down = false;
+    input.radial_opened = false;
+    input.active_kind = RadialKind::none;
+    input.pressed_at = 0;
+    input.selection_x = 0.0f;
+    input.selection_y = 0.0f;
+}
+
 void BeginTriggerHold(ControllerContext& controller, WORD button, RadialKind kind, ULONGLONG now)
 {
     controller.trigger_down = true;
@@ -123,6 +144,16 @@ void BeginTriggerHold(ControllerContext& controller, WORD button, RadialKind kin
     controller.trigger_button = button;
     controller.active_kind = kind;
     controller.pressed_at = now;
+}
+
+void BeginTriggerHold(KeyboardMouseContext& input, RadialKind kind, ULONGLONG now)
+{
+    input.trigger_down = true;
+    input.radial_opened = false;
+    input.active_kind = kind;
+    input.pressed_at = now;
+    input.selection_x = 0.0f;
+    input.selection_y = 0.0f;
 }
 
 void LoadOpenRadialSlots(RadialKind kind)
@@ -157,6 +188,26 @@ bool OpenRadial(ControllerContext& controller, DWORD user_index)
     return true;
 }
 
+bool OpenRadial(KeyboardMouseContext& input)
+{
+    LoadOpenRadialSlots(input.active_kind);
+    if (g_open_spell_slots.empty()) {
+        g_open_kind = RadialKind::none;
+        ResetTriggerState(input);
+        return false;
+    }
+
+    input.radial_opened = true;
+    g_open_kind = input.active_kind;
+
+    int initial_selection = CurrentSelectionFor(input.active_kind);
+    if (initial_selection < 0) initial_selection = 0;
+
+    radial_menu::Open(initial_selection);
+    Log("Opening radial %s menu for keyboard/mouse.", input.active_kind == RadialKind::items ? "quick item" : "spell");
+    return true;
+}
+
 void UpdateRadialSelection(const ControllerContext& controller, XINPUT_STATE* state)
 {
     if (!controller.radial_opened) return;
@@ -169,13 +220,19 @@ void UpdateRadialSelection(const ControllerContext& controller, XINPUT_STATE* st
     state->Gamepad.sThumbRY = 0;
 }
 
-void ConfirmRadialSelection(const ControllerContext& controller)
+void UpdateRadialSelection(const KeyboardMouseContext& input)
+{
+    if (!input.radial_opened) return;
+    radial_menu::UpdateSelectionFromStick(input.selection_x, input.selection_y, g_open_spell_slots.size());
+}
+
+void ConfirmRadialSelection(RadialKind active_kind)
 {
     const int selected_slot = radial_menu::GetSelectedSlot();
     if (selected_slot < 0 || selected_slot >= static_cast<int>(g_open_spell_slots.size())) return;
 
     const auto selected_index = static_cast<std::size_t>(selected_slot);
-    if (controller.active_kind == RadialKind::items) {
+    if (active_kind == RadialKind::items) {
         (void)SwitchToQuickItemSlot(g_open_spell_slots[selected_index].slot_index);
     } else {
         (void)SwitchToSpellSlot(g_open_spell_slots[selected_index].slot_index);
@@ -190,10 +247,18 @@ void CloseRadial(DWORD user_index)
     Log("Closed radial menu for controller %lu.", static_cast<unsigned long>(user_index));
 }
 
+void CloseRadialKeyboardMouse()
+{
+    radial_menu::Close();
+    g_open_spell_slots.clear();
+    g_open_kind = RadialKind::none;
+    Log("Closed radial menu for keyboard/mouse.");
+}
+
 void HandleTriggerRelease(ControllerContext& controller, DWORD user_index, XINPUT_STATE* state, ULONGLONG now)
 {
     if (controller.radial_opened) {
-        ConfirmRadialSelection(controller);
+        ConfirmRadialSelection(controller.active_kind);
         CloseRadial(user_index);
     } else {
         controller.synthetic_button = controller.trigger_button;
@@ -218,6 +283,7 @@ void Reset()
 {
     radial_menu::Close();
     g_controllers = {};
+    g_keyboard_mouse = {};
     g_open_spell_slots.clear();
     g_open_kind = RadialKind::none;
 }
@@ -260,6 +326,56 @@ void HandleControllerState(DWORD user_index, XINPUT_STATE* state)
     ApplyVirtualTap(controller, state, now);
 }
 
+void HandleKeyboardMouseState(bool spell_held, bool item_held)
+{
+    const ULONGLONG now = GetTickCount64();
+    const RadialKind pressed_kind = spell_held ? RadialKind::spells : (item_held ? RadialKind::items : RadialKind::none);
+    const bool trigger_pressed = g_keyboard_mouse.active_kind != RadialKind::none
+        ? pressed_kind == g_keyboard_mouse.active_kind
+        : pressed_kind != RadialKind::none;
+
+    if (pressed_kind != RadialKind::none && !g_keyboard_mouse.trigger_down) {
+        if (!CanStartRadialInput(pressed_kind)) return;
+        BeginTriggerHold(g_keyboard_mouse, pressed_kind, now);
+    }
+
+    if (g_keyboard_mouse.trigger_down && !g_keyboard_mouse.radial_opened && !gameplay_state::IsNormalGameplayHudState()) {
+        ResetTriggerState(g_keyboard_mouse);
+        return;
+    }
+
+    if (g_keyboard_mouse.trigger_down && trigger_pressed && !g_keyboard_mouse.radial_opened &&
+        (now - g_keyboard_mouse.pressed_at) >= kHoldThresholdMs) {
+        if (!OpenRadial(g_keyboard_mouse)) return;
+    }
+
+    UpdateRadialSelection(g_keyboard_mouse);
+
+    if (g_keyboard_mouse.trigger_down && !trigger_pressed) {
+        if (g_keyboard_mouse.radial_opened) {
+            ConfirmRadialSelection(g_keyboard_mouse.active_kind);
+            CloseRadialKeyboardMouse();
+        }
+        ResetTriggerState(g_keyboard_mouse);
+    }
+}
+
+void AddMouseDelta(float delta_x, float delta_y)
+{
+    if (!g_keyboard_mouse.radial_opened) return;
+
+    g_keyboard_mouse.selection_x += delta_x * kMouseSelectionScale;
+    g_keyboard_mouse.selection_y -= delta_y * kMouseSelectionScale;
+
+    const float length_sq = g_keyboard_mouse.selection_x * g_keyboard_mouse.selection_x +
+        g_keyboard_mouse.selection_y * g_keyboard_mouse.selection_y;
+    if (length_sq > 1.0f) {
+        const float inv_length = 1.0f / std::sqrt(length_sq);
+        g_keyboard_mouse.selection_x *= inv_length;
+        g_keyboard_mouse.selection_y *= inv_length;
+    }
+}
+
 const std::vector<SpellSlot>& GetOpenSpellSlots()
 {
     return g_open_spell_slots;
@@ -273,8 +389,8 @@ const char* GetOpenMenuTitle()
 const char* GetOpenMenuControls()
 {
     return g_open_kind == RadialKind::items
-        ? "Right Stick Rotate   Release D-pad Down Confirm"
-        : "Right Stick Rotate   Release D-pad Up Confirm";
+        ? "Right Stick / Mouse Move   Release D-pad Down / Caps Lock Confirm"
+        : "Right Stick / Mouse Move   Release D-pad Up / Tab Confirm";
 }
 
 }  // namespace radial_menu_mod::radial_input

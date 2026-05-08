@@ -14,9 +14,12 @@ namespace radial_menu_mod::input_hook {
 namespace {
 
 using XInputGetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+using GetRawInputDataFn = UINT(WINAPI*)(HRAWINPUT, UINT, LPVOID, PUINT, UINT);
 
 XInputGetStateFn g_original_xinput_get_state = nullptr;
+GetRawInputDataFn g_original_get_raw_input_data = nullptr;
 LPVOID g_xinput_target = nullptr;
+LPVOID g_raw_input_target = nullptr;
 
 DWORD WINAPI HookedXInputGetState(DWORD user_index, XINPUT_STATE* state)
 {
@@ -24,6 +27,50 @@ DWORD WINAPI HookedXInputGetState(DWORD user_index, XINPUT_STATE* state)
     if (result == ERROR_SUCCESS) radial_input::HandleControllerState(user_index, state);
 
     return result;
+}
+
+UINT WINAPI HookedGetRawInputData(HRAWINPUT raw_input, UINT command, LPVOID data, PUINT size, UINT header_size)
+{
+    const UINT result = g_original_get_raw_input_data(raw_input, command, data, size, header_size);
+    if (result == static_cast<UINT>(-1) || command != RID_INPUT || data == nullptr || !radial_menu::IsOpen()) {
+        return result;
+    }
+
+    auto* raw = reinterpret_cast<RAWINPUT*>(data);
+    if (raw->header.dwType != RIM_TYPEMOUSE) return result;
+
+    radial_input::AddMouseDelta(static_cast<float>(raw->data.mouse.lLastX), static_cast<float>(raw->data.mouse.lLastY));
+    raw->data.mouse.lLastX = 0;
+    raw->data.mouse.lLastY = 0;
+    return result;
+}
+
+bool InstallRawInputHook()
+{
+    if (g_raw_input_target != nullptr) return true;
+
+    HMODULE module = LoadLibraryW(L"user32.dll");
+    if (module == nullptr) return false;
+
+    auto* const target = reinterpret_cast<LPVOID>(GetProcAddress(module, "GetRawInputData"));
+    if (target == nullptr) return false;
+
+    MH_STATUS status = MH_CreateHook(target, reinterpret_cast<LPVOID>(&HookedGetRawInputData),
+        reinterpret_cast<LPVOID*>(&g_original_get_raw_input_data));
+    if (status != MH_OK) {
+        Log("Failed to create GetRawInputData hook: %s", MH_StatusToString(status));
+        return false;
+    }
+
+    status = MH_EnableHook(target);
+    if (status != MH_OK) {
+        Log("Failed to enable GetRawInputData hook: %s", MH_StatusToString(status));
+        return false;
+    }
+
+    g_raw_input_target = target;
+    Log("Installed GetRawInputData hook.");
+    return true;
 }
 
 }  // namespace
@@ -66,6 +113,7 @@ bool Install()
 
         g_xinput_target = target;
         Log("Installed XInputGetState hook from %ls.", module_name);
+        if (!InstallRawInputHook()) Log("Unable to install GetRawInputData hook.");
         return true;
     }
 
@@ -75,9 +123,14 @@ bool Install()
 
 void Shutdown()
 {
-    if (g_xinput_target == nullptr) {
-        return;
+    if (g_raw_input_target != nullptr) {
+        MH_DisableHook(g_raw_input_target);
+        MH_RemoveHook(g_raw_input_target);
+        g_raw_input_target = nullptr;
+        g_original_get_raw_input_data = nullptr;
     }
+
+    if (g_xinput_target == nullptr) return;
 
     MH_DisableHook(g_xinput_target);
     MH_RemoveHook(g_xinput_target);

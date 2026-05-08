@@ -3,12 +3,14 @@
 #include "core/common.h"
 #include "render/icons/icon_loader.h"
 #include "input/input_hook.h"
+#include "input/radial_input.h"
 #include "render/ui/radial_menu.h"
 #include "render/d3d/dx12_vtable.h"
 #include "render/ui/eldenring_font.h"
 
 #include <MinHook.h>
 #include <windows.h>
+#include <windowsx.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <imgui.h>
@@ -45,6 +47,8 @@ static bool                        g_icon_srv_allocated = false;
 
 static HWND    g_hwnd        = nullptr;
 static WNDPROC g_old_wndproc = nullptr;
+static POINT g_last_mouse_pos = {};
+static bool g_have_last_mouse_pos = false;
 
 // ── hook plumbing ─────────────────────────────────────────────────────────
 using PFN_Present = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT);
@@ -57,9 +61,43 @@ static void* g_hook_present = nullptr;
 static void* g_hook_ecl     = nullptr;
 
 // ── WndProc ───────────────────────────────────────────────────────────────
+static bool IsKeyboardMouseTrigger(WPARAM key)
+{
+    return key == VK_TAB || key == VK_CAPITAL;
+}
+
+static void HandleMouseMove(LPARAM lparam)
+{
+    POINT pos{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    if (g_have_last_mouse_pos) {
+        radial_input::AddMouseDelta(
+            static_cast<float>(pos.x - g_last_mouse_pos.x),
+            static_cast<float>(pos.y - g_last_mouse_pos.y));
+    }
+    g_last_mouse_pos = pos;
+    g_have_last_mouse_pos = true;
+}
+
 static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
 {
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
+
+    if (radial_menu::IsOpen()) {
+        if (msg == WM_INPUT) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            HandleMouseMove(l);
+            return 0;
+        }
+        if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) return 0;
+        if ((msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) &&
+            IsKeyboardMouseTrigger(w)) {
+            return 0;
+        }
+    } else if (msg == WM_MOUSEMOVE) {
+        g_last_mouse_pos = POINT{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+        g_have_last_mouse_pos = true;
+    }
+
     return CallWindowProcW(g_old_wndproc, hwnd, msg, w, l);
 }
 
@@ -224,6 +262,13 @@ static void CaptureDirectQueue(ID3D12CommandQueue* queue)
     }
 }
 
+static void PollKeyboardMouseRadial()
+{
+    const bool spell_held = (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
+    const bool item_held = (GetAsyncKeyState(VK_CAPITAL) & 0x8000) != 0;
+    radial_input::HandleKeyboardMouseState(spell_held, item_held);
+}
+
 // ── Present hook ──────────────────────────────────────────────────────────
 static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT sync, UINT flags)
 {
@@ -231,6 +276,8 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
         if (g_queue) Init(swap_chain);
         return g_orig_present(swap_chain, sync, flags);
     }
+
+    PollKeyboardMouseRadial();
 
     if (!radial_menu::IsOpen()) {
         if (input_hook::IsGameplayReady()) {
