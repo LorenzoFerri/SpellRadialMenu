@@ -87,6 +87,10 @@ DlDevice* g_disk_device = nullptr;
 void* g_captured_container = nullptr;
 void* g_captured_allocator = nullptr;
 bool g_captured_temp_flag = false;
+bool g_logged_missing_context = false;
+bool g_logged_vfs_read_attempt = false;
+bool g_logged_vfs_open_result = false;
+bool g_logged_vfs_read_result = false;
 
 bool GetSectionRange(const char* name, SectionRange& range)
 {
@@ -221,6 +225,7 @@ void* HookedOpenFile(DlDevice* device, DlUtf16String2015* path, const wchar_t* p
         g_captured_container = container;
         g_captured_allocator = allocator;
         g_captured_temp_flag = is_temp_file;
+        Log("Asset reader: captured game VFS read context.");
     }
 
     return g_orig_open_file ? g_orig_open_file(device, path, path_cstr, container, allocator, is_temp_file) : nullptr;
@@ -232,12 +237,23 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
 {
     bytes.clear();
     if (!path) return false;
+    if (loose_asset_reader::ReadFile(path, bytes, max_size)) return true;
+
     if (!g_disk_device || !g_orig_open_file || !g_captured_container || !g_captured_allocator) {
-        return loose_asset_reader::ReadFile(path, bytes, max_size);
+        if (g_open_file_target && !g_logged_missing_context) {
+            Log("Asset reader: game VFS hook is installed but read context is not captured yet; using loose fallback.");
+            g_logged_missing_context = true;
+        }
+        return false;
     }
 
     std::wstring storage(path);
     DlUtf16String2015 dl_path = MakeDlString(storage);
+    if (!g_logged_vfs_read_attempt) {
+        Log("Asset reader: attempting game VFS read for %ls.", path);
+        g_logged_vfs_read_attempt = true;
+    }
+
     void* file_operator = g_orig_open_file(
         g_disk_device,
         &dl_path,
@@ -246,21 +262,39 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
         g_captured_allocator,
         g_captured_temp_flag);
 
-    if (!file_operator || !IsReadableMemory(file_operator, sizeof(std::uintptr_t) * 14)) return loose_asset_reader::ReadFile(path, bytes, max_size);
+    if (!g_logged_vfs_open_result) {
+        Log("Asset reader: game VFS open returned %p for %ls.", file_operator, path);
+        g_logged_vfs_open_result = true;
+    }
+
+    if (!file_operator || !IsReadableMemory(file_operator, sizeof(std::uintptr_t) * 14)) return false;
 
     const auto* words = reinterpret_cast<const std::uintptr_t*>(file_operator);
     const auto* vtable = reinterpret_cast<const std::uintptr_t*>(words[0]);
     const std::uint64_t size = words[13];
     if (size == 0 || size > max_size || !IsReadableMemory(vtable, sizeof(std::uintptr_t) * 26) || !IsExecutableAddress(vtable[25])) {
-        return loose_asset_reader::ReadFile(path, bytes, max_size);
+        Log("Asset reader: game VFS file operator invalid (size=%llu vtable=%p read_fn=%p); using loose fallback.",
+            static_cast<unsigned long long>(size),
+            vtable,
+            vtable && IsReadableMemory(vtable, sizeof(std::uintptr_t) * 26) ? reinterpret_cast<void*>(vtable[25]) : nullptr);
+        return false;
     }
 
     using ReadFn = int (*)(void*, void*, std::uint64_t);
     bytes.resize(static_cast<std::size_t>(size));
+    if (!g_logged_vfs_read_result) {
+        Log("Asset reader: calling game VFS read function %p for %llu bytes.",
+            reinterpret_cast<void*>(vtable[25]),
+            static_cast<unsigned long long>(size));
+    }
     const int read = reinterpret_cast<ReadFn>(vtable[25])(file_operator, bytes.data(), bytes.size());
+    if (!g_logged_vfs_read_result) {
+        Log("Asset reader: game VFS read returned %d.", read);
+        g_logged_vfs_read_result = true;
+    }
     if (read <= 0) {
         bytes.clear();
-        return loose_asset_reader::ReadFile(path, bytes, max_size);
+        return false;
     }
 
     bytes.resize(static_cast<std::size_t>(read));
@@ -300,7 +334,18 @@ bool Install()
         return false;
     }
 
+    Log("Asset reader: installed game VFS open hook.");
     return true;
+}
+
+bool IsHookInstalled()
+{
+    return g_open_file_target != nullptr;
+}
+
+bool HasGameReadContext()
+{
+    return g_disk_device && g_orig_open_file && g_captured_container && g_captured_allocator;
 }
 
 void Shutdown()
@@ -312,6 +357,7 @@ void Shutdown()
     g_orig_open_file = nullptr;
     g_captured_container = nullptr;
     g_captured_allocator = nullptr;
+    g_logged_missing_context = false;
 }
 
 }  // namespace radial_menu_mod::asset_reader

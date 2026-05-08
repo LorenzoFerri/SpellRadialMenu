@@ -11,6 +11,15 @@ namespace {
 std::uintptr_t g_cs_fe_man_static_address = 0;
 bool g_searched_cs_fe_man = false;
 bool g_logged_missing_cs_fe_man = false;
+bool g_logged_unreadable_cs_fe_man = false;
+
+template <typename T>
+bool ReadGameMemory(std::uintptr_t address, T& value)
+{
+    if (!IsReadableMemory(reinterpret_cast<const void*>(address), sizeof(T))) return false;
+    value = *reinterpret_cast<const T*>(address);
+    return true;
+}
 
 std::uintptr_t ResolveCSFeMan()
 {
@@ -23,7 +32,8 @@ std::uintptr_t ResolveCSFeMan()
     }
 
     if (!g_cs_fe_man_static_address) return 0;
-    return *reinterpret_cast<std::uintptr_t*>(g_cs_fe_man_static_address);
+    std::uintptr_t fe_man = 0;
+    return ReadGameMemory(g_cs_fe_man_static_address, fe_man) ? fe_man : 0;
 }
 
 }  // namespace
@@ -42,7 +52,17 @@ bool IsNormalGameplayHudState()
         return false;
     }
 
-    return *reinterpret_cast<const std::uint8_t*>(fe_man + kHudStateOffset) == kHudStateDefault;
+    std::uint8_t hud_state = 0;
+    if (!ReadGameMemory(fe_man + kHudStateOffset, hud_state)) {
+        if (!g_logged_unreadable_cs_fe_man) {
+            Log("CSFeMan HUD state unreadable; radial menu input is disabled until HUD state can be read.");
+            g_logged_unreadable_cs_fe_man = true;
+        }
+        return false;
+    }
+
+    g_logged_unreadable_cs_fe_man = false;
+    return hud_state == kHudStateDefault;
 }
 
 }  // namespace radial_menu_mod::gameplay_state

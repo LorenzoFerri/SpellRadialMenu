@@ -33,6 +33,9 @@ std::size_t g_atlas_count = 0;
 std::unordered_map<std::uint32_t, IconEntry> g_icons;
 bool g_initialized = false;
 bool g_failed = false;
+bool g_logged_begin = false;
+bool g_logged_missing_assets = false;
+bool g_logged_waiting_for_vfs_context = false;
 
 void ResetLoadedIconState()
 {
@@ -96,16 +99,35 @@ bool TryInitialize(
     bool uploaded_any = false;
     const char* selected_label = nullptr;
     std::size_t total_uploaded_count = 0;
+    if (!g_logged_begin) {
+        Log("Icon loader: probing game icon archives.");
+        g_logged_begin = true;
+    }
+    if (asset_reader::HasGameReadContext()) g_logged_waiting_for_vfs_context = false;
+
     for (const Candidate& candidate : candidates) {
         std::vector<std::uint8_t> tpf_dcx;
         std::vector<std::uint8_t> sblyt_dcx;
-        if (!asset_reader::ReadFile(candidate.tpf_path, tpf_dcx, 160ull * 1024ull * 1024ull) ||
-            !asset_reader::ReadFile(candidate.layout_path, sblyt_dcx, 4ull * 1024ull * 1024ull)) {
+        const bool read_tpf = asset_reader::ReadFile(candidate.tpf_path, tpf_dcx, 160ull * 1024ull * 1024ull);
+        const bool read_layout = asset_reader::ReadFile(candidate.layout_path, sblyt_dcx, 4ull * 1024ull * 1024ull);
+        if (!read_tpf || !read_layout) {
+            if (!g_logged_missing_assets) {
+                Log("Icon loader: %s assets unavailable (tpf=%d layout=%d).",
+                    candidate.label,
+                    static_cast<int>(read_tpf),
+                    static_cast<int>(read_layout));
+            }
             continue;
         }
 
         saw_assets = true;
+        Log("Icon loader: %s assets read (tpf_dcx=%zu bytes layout_dcx=%zu bytes).",
+            candidate.label,
+            tpf_dcx.size(),
+            sblyt_dcx.size());
+
         if (!dcx::StartsWithDcx(tpf_dcx)) {
+            Log("Icon loader: %s TPF is not DCX; trying Data0 AES range decrypt.", candidate.label);
             if (!candidate.decrypt_tpf || !icon_assets::DecryptData0AesRanges(tpf_dcx)) {
                 Log("Icon loader: %s TPF is encrypted or invalid.", candidate.label);
                 continue;
@@ -121,14 +143,31 @@ bool TryInitialize(
                 dflt_error);
             continue;
         }
+        Log("Icon loader: %s decompressed (tpf=%zu bytes layout=%zu bytes).", candidate.label, tpf.size(), sblyt.size());
 
         const std::size_t first_candidate_atlas = g_atlas_count;
         if (!uploaded_any) ResetLoadedIconState();
-        AddLayoutIcons(icon_assets::ParseLayoutIcons(sblyt));
+        const auto layout_icons = icon_assets::ParseLayoutIcons(sblyt);
+        AddLayoutIcons(layout_icons);
+        Log("Icon loader: %s layout parsed icons=%zu total_icons=%zu atlases=%zu.",
+            candidate.label,
+            layout_icons.size(),
+            g_icons.size(),
+            g_atlas_count);
+
         std::size_t uploaded_count = 0;
+        std::size_t missing_texture_count = 0;
+        std::size_t upload_failure_count = 0;
         for (std::size_t i = first_candidate_atlas; i < g_atlas_count; ++i) {
             std::vector<std::uint8_t> dds;
-            if (!icon_assets::ExtractTpfTexture(tpf, g_atlases[i].name, dds)) continue;
+            if (!icon_assets::ExtractTpfTexture(tpf, g_atlases[i].name, dds)) {
+                ++missing_texture_count;
+                if (missing_texture_count <= 4) {
+                    Log("Icon loader: %s missing atlas texture '%s' in TPF.", candidate.label, g_atlases[i].name.c_str());
+                }
+                continue;
+            }
+
             d3d_texture_upload::UploadedTexture texture{};
             if (d3d_texture_upload::UploadBc7Texture(device, queue, cpu_srvs[i], dds, texture)) {
                 g_atlases[i].texture = texture.resource;
@@ -137,8 +176,21 @@ bool TryInitialize(
                 g_atlases[i].gpu_srv = gpu_srvs[i];
                 uploaded_any = true;
                 ++uploaded_count;
+            } else {
+                ++upload_failure_count;
+                if (upload_failure_count <= 4) {
+                    Log("Icon loader: %s failed to upload atlas '%s' (%zu DDS bytes).",
+                        candidate.label,
+                        g_atlases[i].name.c_str(),
+                        dds.size());
+                }
             }
         }
+        Log("Icon loader: %s atlas upload result uploaded=%zu missing_textures=%zu upload_failures=%zu.",
+            candidate.label,
+            uploaded_count,
+            missing_texture_count,
+            upload_failure_count);
 
         if (uploaded_count == 0 && !uploaded_any) {
             Log("Icon loader: %s icon assets parsed but no atlases uploaded (icons=%zu atlases=%zu).",
@@ -155,7 +207,21 @@ bool TryInitialize(
         }
     }
 
-    if (!saw_assets) return false;
+    if (!saw_assets) {
+        if (asset_reader::IsHookInstalled() && !asset_reader::HasGameReadContext()) {
+            if (!g_logged_waiting_for_vfs_context) {
+                Log("Icon loader: waiting for game VFS read context; loose fallback did not provide icon archives.");
+                g_logged_waiting_for_vfs_context = true;
+            }
+            return false;
+        }
+
+        if (!g_logged_missing_assets) {
+            Log("Icon loader: no icon archives found from VFS or loose mod fallback.");
+            g_logged_missing_assets = true;
+        }
+        return false;
+    }
     if (g_icons.empty() || !uploaded_any) {
         Log("Icon loader: failed to upload atlases (icons=%zu uploaded=%d).", g_icons.size(), static_cast<int>(uploaded_any));
         ResetLoadedIconState();

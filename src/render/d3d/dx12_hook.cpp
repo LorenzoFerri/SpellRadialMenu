@@ -44,6 +44,7 @@ static UINT                        g_rtv_stride = 0;
 static D3D12_CPU_DESCRIPTOR_HANDLE g_icon_srv_cpu[icon_loader::kMaxAtlases] = {};
 static D3D12_GPU_DESCRIPTOR_HANDLE g_icon_srv_gpu[icon_loader::kMaxAtlases] = {};
 static bool                        g_icon_srv_allocated = false;
+static bool                        g_logged_icon_vfs_unavailable = false;
 
 static HWND    g_hwnd        = nullptr;
 static WNDPROC g_old_wndproc = nullptr;
@@ -116,7 +117,10 @@ static void SrvFree(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE,
 
 static void TryInitializeIcons()
 {
-    if (!asset_reader::Install()) return;
+    if (!asset_reader::Install() && !g_logged_icon_vfs_unavailable) {
+        Log("Icon loader: game VFS hook unavailable; trying loose mod asset fallback.");
+        g_logged_icon_vfs_unavailable = true;
+    }
 
     if (!g_icon_srv_allocated) {
         for (std::size_t i = 0; i < icon_loader::kMaxAtlases; ++i) {

@@ -11,6 +11,19 @@ using namespace equip_access;
 
 bool g_logged_no_equip_data = false;
 
+void LogResolvedSlots(const char* label, const std::vector<SpellSlot>& slots)
+{
+    Log("%s radial entries loaded: count=%zu.", label, slots.size());
+    for (const SpellSlot& slot : slots) {
+        Log("%s radial entry: slot=%zu id=%u resolved_icon=%u name=\"%s\".",
+            label,
+            slot.slot_index,
+            slot.spell_id,
+            slot.icon_id,
+            slot.name.c_str());
+    }
+}
+
 }  // namespace
 
 bool InitializeSpellManager()
@@ -73,6 +86,7 @@ std::vector<SpellSlot> GetMemorizedSpells()
             .is_current = (static_cast<int>(i) == current_entry),
         });
     }
+    LogResolvedSlots("Spell", spells);
     return spells;
 }
 
@@ -143,6 +157,7 @@ std::vector<SpellSlot> GetQuickItems()
             .is_current = (current_slot == static_cast<std::int32_t>(i)),
         });
     }
+    LogResolvedSlots("Quick item", items);
     return items;
 }
 

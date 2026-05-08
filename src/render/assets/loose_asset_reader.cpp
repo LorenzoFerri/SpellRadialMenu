@@ -11,6 +11,7 @@ namespace radial_menu_mod::loose_asset_reader {
 namespace {
 
 bool g_logged_disk_fallback = false;
+bool g_logged_disk_miss = false;
 
 std::wstring DllDirectory()
 {
@@ -82,8 +83,9 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
 
     std::wstring dir = DllDirectory();
     for (int depth = 0; depth < 6 && !dir.empty(); ++depth) {
-        const std::wstring candidate = dir + L"\\mod\\" + relative;
-        if (ReadDiskFile(candidate, bytes, max_size)) {
+        const std::wstring package_candidate = dir + L"\\" + relative;
+        const std::wstring mod_candidate = dir + L"\\mod\\" + relative;
+        if (ReadDiskFile(package_candidate, bytes, max_size) || ReadDiskFile(mod_candidate, bytes, max_size)) {
             if (!g_logged_disk_fallback) {
                 Log("Asset reader: using disk mod asset fallback.");
                 g_logged_disk_fallback = true;
@@ -91,6 +93,11 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
             return true;
         }
         dir = ParentPath(std::move(dir));
+    }
+
+    if (!g_logged_disk_miss) {
+        Log("Asset reader: loose mod asset fallback did not find requested Data0 paths near the DLL.");
+        g_logged_disk_miss = true;
     }
 
     return false;
