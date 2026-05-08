@@ -786,11 +786,6 @@ radial_menu::IconTextureInfo Resolve(std::uint32_t icon_id)
     if (!g_initialized) return {};
 
     auto it = g_icons.find(icon_id);
-    std::uint32_t resolved_icon_id = icon_id;
-    if (it == g_icons.end()) {
-        resolved_icon_id = icon_id + 2000u;
-        it = g_icons.find(resolved_icon_id);
-    }
     if (it == g_icons.end()) {
         return {};
     }

@@ -375,9 +375,9 @@ bool IsNormalGameplayHudState()
     if (!fe_man) {
         if (!g_logged_missing_cs_fe_man) {
             g_logged_missing_cs_fe_man = true;
-            Log("CSFeMan unresolved; radial menu input guard will allow legacy behavior.");
+            Log("CSFeMan unresolved; radial menu input is disabled until HUD state can be read.");
         }
-        return true;
+        return false;
     }
 
     return *reinterpret_cast<const std::uint8_t*>(fe_man + kHudStateOffset) == kHudStateDefault;
