@@ -39,6 +39,8 @@ std::string FormatSlotLabel(const SpellSlot& slot)
 
 const char* GetCategoryLabel(const SpellSlot& slot)
 {
+    if (slot.is_item) return "ITEM";
+
     switch (slot.category) {
     case SpellCategory::sorcery:
         return "SORCERY";
@@ -281,7 +283,7 @@ void UpdateSelectionFromStick(float stick_x, float stick_y, std::size_t slot_cou
     g_selected_slot = static_cast<int>(std::floor(angle / segment_size)) % static_cast<int>(slot_count);
 }
 
-void Draw(const std::vector<SpellSlot>& slots)
+void Draw(const std::vector<SpellSlot>& slots, const char* title, const char* controls)
 {
     if (!g_is_open) {
         return;
@@ -363,7 +365,6 @@ void Draw(const std::vector<SpellSlot>& slots)
     draw_list->AddCircle(center, center_panel_radius, IM_COL32(176, 151, 106, 190), 96, 1.5f * ui_scale);
     draw_list->AddCircle(center, center_panel_radius - (12.0f * ui_scale), IM_COL32(94, 79, 54, 120), 96, 1.0f * ui_scale);
 
-    const char* title = "Quick Spell";
     AddCenteredText(draw_list, font, base_font_size * 0.94f * ui_scale, center, center.y - (48.0f * ui_scale), IM_COL32(219, 206, 174, 220), title);
 
     if (g_selected_slot >= 0 && g_selected_slot < static_cast<int>(slots.size())) {
@@ -386,7 +387,6 @@ void Draw(const std::vector<SpellSlot>& slots)
         }
     }
 
-    const char* controls = "Right Stick Rotate   Release D-pad Up Confirm";
     AddCenteredText(draw_list, font, base_font_size * 0.84f * ui_scale, center, center.y + wheel_outer_radius + (28.0f * ui_scale), IM_COL32(220, 213, 197, 220), controls);
 
     ImGui::End();

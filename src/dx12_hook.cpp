@@ -210,7 +210,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* sc, UINT sync, U
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    radial_menu::Draw(input_hook::GetOpenSpellSlots());
+    radial_menu::Draw(input_hook::GetOpenSpellSlots(), input_hook::GetOpenMenuTitle(), input_hook::GetOpenMenuControls());
 
     ImGui::Render();
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_cmdlist);

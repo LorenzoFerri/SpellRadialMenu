@@ -20,32 +20,38 @@ namespace {
 using XInputGetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
 
 constexpr ULONGLONG kHoldThresholdMs = 180;
-constexpr ULONGLONG kQuickSelectHoldMs = 260;
-constexpr ULONGLONG kQuickSelectReleaseGapMs = 100;
 constexpr ULONGLONG kTapPressMs = 60;
 constexpr ULONGLONG kTapReleaseMs = 90;
-constexpr WORD kInterceptedButton = XINPUT_GAMEPAD_DPAD_UP;
+constexpr WORD kSpellButton = XINPUT_GAMEPAD_DPAD_UP;
+constexpr WORD kItemButton = XINPUT_GAMEPAD_DPAD_DOWN;
 constexpr DWORD kControllerCount = 4;
+
+enum class RadialKind {
+    none,
+    spells,
+    items,
+};
 
 enum class SyntheticInputPhase {
     idle,
-    quick_select_hold,
-    quick_select_release_gap,
     tap_press,
     tap_release,
 };
 
 struct ControllerContext {
-    bool dpad_up_down = false;
+    bool trigger_down = false;
     bool radial_opened = false;
+    WORD trigger_button = 0;
+    WORD synthetic_button = 0;
+    RadialKind active_kind = RadialKind::none;
     ULONGLONG pressed_at = 0;
     SyntheticInputPhase synthetic_phase = SyntheticInputPhase::idle;
     ULONGLONG synthetic_phase_until = 0;
-    std::uint32_t remaining_taps = 0;
 };
 
 std::array<ControllerContext, kControllerCount> g_controllers = {};
 std::vector<SpellSlot> g_open_spell_slots;
+RadialKind g_open_kind = RadialKind::none;
 XInputGetStateFn g_original_xinput_get_state = nullptr;
 LPVOID g_xinput_target = nullptr;
 std::uintptr_t g_cs_fe_man_static_address = 0;
@@ -377,9 +383,24 @@ bool IsNormalGameplayHudState()
     return *reinterpret_cast<const std::uint8_t*>(fe_man + kHudStateOffset) == kHudStateDefault;
 }
 
-bool CanStartRadialInput()
+bool CanStartRadialInput(RadialKind kind)
 {
-    return IsNormalGameplayHudState() && !GetMemorizedSpells().empty();
+    if (!IsNormalGameplayHudState()) return false;
+    return kind == RadialKind::spells ? !GetMemorizedSpells().empty() : true;
+}
+
+RadialKind KindForButton(WORD button)
+{
+    if (button == kSpellButton) return RadialKind::spells;
+    if (button == kItemButton) return RadialKind::items;
+    return RadialKind::none;
+}
+
+WORD FirstPressedTrigger(WORD buttons)
+{
+    if ((buttons & kSpellButton) != 0) return kSpellButton;
+    if ((buttons & kItemButton) != 0) return kItemButton;
+    return 0;
 }
 
 float NormalizeThumbAxis(SHORT value, SHORT deadzone)
@@ -392,71 +413,26 @@ float NormalizeThumbAxis(SHORT value, SHORT deadzone)
     return (normalized < -1.0f) ? -1.0f : ((normalized > 1.0f) ? 1.0f : normalized);
 }
 
-void QueueTapSequence(ControllerContext& controller, ULONGLONG now, std::uint32_t tap_count)
+void QueueTap(ControllerContext& controller, ULONGLONG now)
 {
-    if (tap_count == 0) {
-        controller.synthetic_phase = SyntheticInputPhase::idle;
-        controller.synthetic_phase_until = 0;
-        controller.remaining_taps = 0;
-        return;
-    }
-
     controller.synthetic_phase = SyntheticInputPhase::tap_press;
     controller.synthetic_phase_until = now + kTapPressMs;
-    controller.remaining_taps = tap_count;
-}
-
-void QueueQuickSelectSequence(ControllerContext& controller, ULONGLONG now, std::uint32_t taps_after_first_spell)
-{
-    controller.synthetic_phase = SyntheticInputPhase::quick_select_hold;
-    controller.synthetic_phase_until = now + kQuickSelectHoldMs;
-    controller.remaining_taps = taps_after_first_spell;
 }
 
 void ApplyVirtualTap(ControllerContext& controller, XINPUT_STATE* state, ULONGLONG now)
 {
-    state->Gamepad.wButtons &= ~kInterceptedButton;
+    if (controller.synthetic_button == 0) return;
+
+    state->Gamepad.wButtons &= ~controller.synthetic_button;
 
     switch (controller.synthetic_phase) {
     case SyntheticInputPhase::idle:
-        return;
-
-    case SyntheticInputPhase::quick_select_hold:
-        if (now < controller.synthetic_phase_until) {
-            state->Gamepad.wButtons |= kInterceptedButton;
-            return;
-        }
-
-        controller.synthetic_phase = SyntheticInputPhase::quick_select_release_gap;
-        controller.synthetic_phase_until = now + kQuickSelectReleaseGapMs;
-        return;
-
-    case SyntheticInputPhase::quick_select_release_gap:
-        if (now < controller.synthetic_phase_until) {
-            return;
-        }
-
-        if (controller.remaining_taps == 0) {
-            controller.synthetic_phase = SyntheticInputPhase::idle;
-            controller.synthetic_phase_until = 0;
-            return;
-        }
-
-        controller.synthetic_phase = SyntheticInputPhase::tap_press;
-        controller.synthetic_phase_until = now + kTapPressMs;
-        state->Gamepad.wButtons |= kInterceptedButton;
+        controller.synthetic_button = 0;
         return;
 
     case SyntheticInputPhase::tap_press:
-        if (controller.remaining_taps == 0) {
-            controller.synthetic_phase = SyntheticInputPhase::idle;
-            controller.synthetic_phase_until = 0;
-            return;
-        }
-
-        state->Gamepad.wButtons |= kInterceptedButton;
+        state->Gamepad.wButtons |= controller.synthetic_button;
         if (now >= controller.synthetic_phase_until) {
-            --controller.remaining_taps;
             controller.synthetic_phase = SyntheticInputPhase::tap_release;
             controller.synthetic_phase_until = now + kTapReleaseMs;
         }
@@ -467,15 +443,9 @@ void ApplyVirtualTap(ControllerContext& controller, XINPUT_STATE* state, ULONGLO
             return;
         }
 
-        if (controller.remaining_taps == 0) {
-            controller.synthetic_phase = SyntheticInputPhase::idle;
-            controller.synthetic_phase_until = 0;
-            return;
-        }
-
-        controller.synthetic_phase = SyntheticInputPhase::tap_press;
-        controller.synthetic_phase_until = now + kTapPressMs;
-        state->Gamepad.wButtons |= kInterceptedButton;
+        controller.synthetic_phase = SyntheticInputPhase::idle;
+        controller.synthetic_phase_until = 0;
+        controller.synthetic_button = 0;
         return;
     }
 }
@@ -489,35 +459,55 @@ DWORD WINAPI HookedXInputGetState(DWORD user_index, XINPUT_STATE* state)
 
     auto& controller = g_controllers[user_index];
     const ULONGLONG now = GetTickCount64();
-    const bool physical_dpad_up_pressed = (state->Gamepad.wButtons & kInterceptedButton) != 0;
+    const WORD pressed_trigger = FirstPressedTrigger(state->Gamepad.wButtons);
+    const bool physical_trigger_pressed = controller.trigger_button != 0
+        ? ((state->Gamepad.wButtons & controller.trigger_button) != 0)
+        : (pressed_trigger != 0);
 
-    if (physical_dpad_up_pressed && !controller.dpad_up_down) {
-        if (!CanStartRadialInput()) {
+    if (pressed_trigger != 0 && !controller.trigger_down) {
+        const RadialKind kind = KindForButton(pressed_trigger);
+        if (!CanStartRadialInput(kind)) {
             return result;
         }
 
-        controller.dpad_up_down = true;
+        controller.trigger_down = true;
         controller.radial_opened = false;
+        controller.trigger_button = pressed_trigger;
+        controller.active_kind = kind;
         controller.pressed_at = now;
     }
 
-    if (controller.dpad_up_down && !controller.radial_opened && !IsNormalGameplayHudState()) {
-        controller.dpad_up_down = false;
+    if (controller.trigger_down && !controller.radial_opened && !IsNormalGameplayHudState()) {
+        controller.trigger_down = false;
         controller.radial_opened = false;
+        controller.trigger_button = 0;
+        controller.active_kind = RadialKind::none;
         return result;
     }
 
-    if (controller.dpad_up_down && physical_dpad_up_pressed && !controller.radial_opened &&
+    if (controller.trigger_down && physical_trigger_pressed && !controller.radial_opened &&
         (now - controller.pressed_at) >= kHoldThresholdMs) {
+        g_open_spell_slots = controller.active_kind == RadialKind::items ? GetQuickItems() : GetMemorizedSpells();
+        if (g_open_spell_slots.empty()) {
+            controller.trigger_down = false;
+            controller.radial_opened = false;
+            controller.trigger_button = 0;
+            controller.active_kind = RadialKind::none;
+            g_open_kind = RadialKind::none;
+            return result;
+        }
+
         controller.radial_opened = true;
-        g_open_spell_slots = GetMemorizedSpells();
-        int initial_selection = GetCurrentSpellSlot();
+        g_open_kind = controller.active_kind;
+        int initial_selection = controller.active_kind == RadialKind::items ? GetCurrentQuickItemSlot() : GetCurrentSpellSlot();
         if (initial_selection < 0 && !g_open_spell_slots.empty()) {
             initial_selection = 0;
         }
 
         radial_spell_menu::radial_menu::Open(initial_selection);
-        Log("Opening radial spell menu for controller %lu.", static_cast<unsigned long>(user_index));
+        Log("Opening radial %s menu for controller %lu.",
+            controller.active_kind == RadialKind::items ? "quick item" : "spell",
+            static_cast<unsigned long>(user_index));
     }
 
     if (controller.radial_opened) {
@@ -530,33 +520,37 @@ DWORD WINAPI HookedXInputGetState(DWORD user_index, XINPUT_STATE* state)
         state->Gamepad.sThumbRY = 0;
     }
 
-    if (controller.dpad_up_down && !physical_dpad_up_pressed) {
+    if (controller.trigger_down && !physical_trigger_pressed) {
         if (controller.radial_opened) {
             const int selected_slot = radial_spell_menu::radial_menu::GetSelectedSlot();
 
             if (selected_slot >= 0 && selected_slot < static_cast<int>(g_open_spell_slots.size())) {
                 const std::size_t selected_index = static_cast<std::size_t>(selected_slot);
-                if (!SwitchToSpellSlot(g_open_spell_slots[selected_index].slot_index)) {
-                    QueueQuickSelectSequence(controller, now, static_cast<std::uint32_t>(selected_index));
-                    Log("Queued quick-select plus %u follow-up taps for spell selection.",
-                        static_cast<unsigned int>(selected_index));
-                }
+                const bool switched = controller.active_kind == RadialKind::items
+                    ? SwitchToQuickItemSlot(g_open_spell_slots[selected_index].slot_index)
+                    : SwitchToSpellSlot(g_open_spell_slots[selected_index].slot_index);
+                (void)switched;
             }
 
             radial_spell_menu::radial_menu::Close();
             g_open_spell_slots.clear();
-            Log("Closed radial spell menu for controller %lu.", static_cast<unsigned long>(user_index));
+            g_open_kind = RadialKind::none;
+            Log("Closed radial menu for controller %lu.", static_cast<unsigned long>(user_index));
         } else {
-            QueueTapSequence(controller, now, 1);
+            controller.synthetic_button = controller.trigger_button;
+            QueueTap(controller, now);
         }
 
-        controller.dpad_up_down = false;
+        const WORD released_button = controller.trigger_button;
+        controller.trigger_down = false;
         controller.radial_opened = false;
-        state->Gamepad.wButtons &= ~kInterceptedButton;
+        controller.trigger_button = 0;
+        controller.active_kind = RadialKind::none;
+        state->Gamepad.wButtons &= ~released_button;
     }
 
-    if (controller.dpad_up_down || controller.radial_opened) {
-        state->Gamepad.wButtons &= ~kInterceptedButton;
+    if ((controller.trigger_down || controller.radial_opened) && controller.trigger_button != 0) {
+        state->Gamepad.wButtons &= ~controller.trigger_button;
     }
 
     ApplyVirtualTap(controller, state, now);
@@ -622,6 +616,7 @@ void Shutdown()
     radial_spell_menu::radial_menu::Close();
     g_controllers = {};
     g_open_spell_slots.clear();
+    g_open_kind = RadialKind::none;
     g_xinput_target = nullptr;
     g_original_xinput_get_state = nullptr;
 }
@@ -634,6 +629,18 @@ bool IsMenuOpen()
 const std::vector<SpellSlot>& GetOpenSpellSlots()
 {
     return g_open_spell_slots;
+}
+
+const char* GetOpenMenuTitle()
+{
+    return g_open_kind == RadialKind::items ? "Quick Item" : "Quick Spell";
+}
+
+const char* GetOpenMenuControls()
+{
+    return g_open_kind == RadialKind::items
+        ? "Right Stick Rotate   Release D-pad Down Confirm"
+        : "Right Stick Rotate   Release D-pad Up Confirm";
 }
 
 }  // namespace radial_spell_menu::input_hook

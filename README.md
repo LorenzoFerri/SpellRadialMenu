@@ -6,7 +6,8 @@ An Elden Ring mod that replaces the default d-pad spell cycling with a radial wh
 
 ## Features
 
-- **Radial wheel** — hold D-pad Up to open, use the right stick to select a spell, release to confirm
+- **Spell radial wheel** — hold D-pad Up to open, use the right stick to select a spell, release to confirm
+- **Quick item radial wheel** — hold D-pad Down to open, use the right stick to select a belt item, release to confirm
 - **Spell names and categories** — reads live from the game's param/message repositories at runtime; no data files needed
 - **Category colour coding** — sorceries in blue, incantations in gold
 - **Selection highlight** — the currently selected spell arc is highlighted with a coloured border
@@ -16,10 +17,11 @@ An Elden Ring mod that replaces the default d-pad spell cycling with a radial wh
 
 | Input | Action |
 |---|---|
-| Hold D-pad Up (~180 ms) | Open radial menu |
+| Hold D-pad Up (~180 ms) | Open spell radial menu |
+| Hold D-pad Down (~180 ms) | Open quick item radial menu |
 | Right stick | Move selection |
-| Release D-pad Up | Confirm selection |
-| Release without moving stick | Pass through as a normal D-pad Up tap |
+| Release held D-pad direction | Confirm selection |
+| Release without opening a radial | Pass through as a normal D-pad tap |
 
 ## Requirements
 
@@ -169,7 +171,7 @@ toolchains/            — Downloaded llvm-mingw binary (gitignored)
 Because `load_early = false`, the game's D3D12 swap chain already exists when the DLL loads. `Install()` creates a tiny hidden window and a throw-away swap chain purely to read the `IDXGISwapChain::Present` vtable pointer, then destroys everything. MinHook patches that address so every `Present` call goes through `HookedPresent`. A second hook on `ID3D12CommandQueue::ExecuteCommandLists` captures the game's real command queue, which ImGui's DX12 backend needs. ImGui is initialised lazily on the first `Present` call after the queue is captured.
 
 ### Input (`input_hook.cpp`)
-`XInputGetState` is hooked via MinHook. A hold of D-pad Up longer than 180 ms opens the radial menu and suppresses the button from the game. The right stick axes are consumed while the menu is open and fed to `UpdateSelectionFromStick`. On release, `SwitchToSpellSlot` writes directly to `EquipMagicData.selected_slot` in game memory; if that fails it falls back to replaying synthetic D-pad Up taps.
+`XInputGetState` is hooked via MinHook. A hold of D-pad Up longer than 180 ms opens the spell radial, while D-pad Down opens the quick item radial. The held D-pad direction is suppressed once a radial is opening/open, and short taps are replayed so vanilla cycling still works. The right stick axes are consumed while the menu is open and fed to `UpdateSelectionFromStick`. On release, spell selection writes directly to `EquipMagicData.selected_slot`; quick item selection writes to `EquipItemData.selected_quick_slot`.
 
 ### Memory (`spell_manager.cpp`, `spell_metadata.cpp`)
 Both files use byte-pattern scanning (`FindPattern`) against the game's `.exe` image to locate `GameDataMan` and `SoloParamRepository` without relying on hardcoded absolute addresses. Spell names are read from the game's `MsgRepository` by hooking its internal lookup function.

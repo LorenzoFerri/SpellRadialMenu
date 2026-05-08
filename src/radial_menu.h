@@ -18,6 +18,6 @@ void Close();
 bool IsOpen();
 int GetSelectedSlot();
 void UpdateSelectionFromStick(float stick_x, float stick_y, std::size_t slot_count);
-void Draw(const std::vector<SpellSlot>& slots);
+void Draw(const std::vector<SpellSlot>& slots, const char* title, const char* controls);
 
 }  // namespace radial_spell_menu::radial_menu

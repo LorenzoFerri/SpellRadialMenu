@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -82,10 +83,36 @@ bool                 g_logged_lookup_failure     = false;
 
 std::mutex g_cache_mutex;
 std::unordered_map<std::uint32_t, ResolvedSpellMetadata> g_metadata_cache;
+std::unordered_map<std::uint32_t, ResolvedItemMetadata> g_item_metadata_cache;
 std::uintptr_t g_goods_param_offset = 0;
 bool g_logged_goods_fallback = false;
 
 const wchar_t* HookedMsgRepositoryLookup(void* repo, unsigned int version, unsigned int category, int msg_id);
+
+std::size_t GetImageSize(HMODULE module)
+{
+    const auto base = reinterpret_cast<std::uintptr_t>(module);
+    if (!base) return 0;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
+    return nt->OptionalHeader.SizeOfImage;
+}
+
+std::uint32_t ReadUnalignedU32(const std::uint8_t* ptr)
+{
+    std::uint32_t value = 0;
+    std::memcpy(&value, ptr, sizeof(value));
+    return value;
+}
+
+std::uint16_t ReadUnalignedU16(const std::uint8_t* ptr)
+{
+    std::uint16_t value = 0;
+    std::memcpy(&value, ptr, sizeof(value));
+    return value;
+}
 
 std::string Utf8FromWide(const wchar_t* text)
 {
@@ -240,6 +267,62 @@ std::uint32_t ReadGoodsIconId(std::uintptr_t repo, std::uint32_t spell_id)
     return icon_id != 0 ? static_cast<std::uint32_t>(icon_id) : 0;
 }
 
+std::uint32_t ReadAnyGoodsIconId(std::uintptr_t repo, std::uint32_t item_id)
+{
+    std::uintptr_t offset = LocateEquipParamGoodsOffset(repo);
+    if (offset) {
+        const std::uint8_t* data = FindParamRowData(repo, offset, item_id);
+        if (data) {
+            const auto icon_id = *reinterpret_cast<const std::uint16_t*>(data + kGoodsIconIdOffset);
+            if (icon_id != 0) return static_cast<std::uint32_t>(icon_id);
+        }
+    }
+
+    for (std::uintptr_t candidate = 0; candidate < 0x1000; candidate += sizeof(void*)) {
+        if (candidate == kMagicParamOffset || candidate == offset) continue;
+        const std::uint8_t* row = FindParamRowData(repo, candidate, item_id);
+        if (!row) continue;
+
+        const auto icon_id = *reinterpret_cast<const std::uint16_t*>(row + kGoodsIconIdOffset);
+        if (icon_id == 0) continue;
+
+        if (!g_logged_goods_fallback) {
+            Log("Spell metadata: located item goods row by fallback scan.");
+            g_logged_goods_fallback = true;
+        }
+        return static_cast<std::uint32_t>(icon_id);
+    }
+
+    return 0;
+}
+
+std::uint32_t ReadSeamlessCoopIconId(std::uint32_t item_id)
+{
+    HMODULE module = GetModuleHandleA("ersc.dll");
+    if (!module) return 0;
+
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(module);
+    const std::size_t size = GetImageSize(module);
+    if (size < sizeof(std::uint32_t)) return 0;
+
+    // Seamless constructs item-like records in its DLL; extract the icon write near the item ID registration.
+    constexpr std::uint8_t kIconWritePattern[] = {0x66, 0xC7, 0x40, 0x30};
+    for (std::size_t i = 0; i + sizeof(std::uint32_t) <= size; ++i) {
+        if (ReadUnalignedU32(bytes + i) != item_id) continue;
+
+        const std::size_t start = i >= 128 ? i - 128 : 0;
+        for (std::size_t pos = i; pos-- > start;) {
+            if (pos + sizeof(kIconWritePattern) + sizeof(std::uint16_t) > size) continue;
+            if (std::memcmp(bytes + pos, kIconWritePattern, sizeof(kIconWritePattern)) != 0) continue;
+
+            const auto icon_id = ReadUnalignedU16(bytes + pos + sizeof(kIconWritePattern));
+            if (icon_id != 0) return static_cast<std::uint32_t>(icon_id);
+        }
+    }
+
+    return 0;
+}
+
 MsgRepositoryLookupFn GetMsgLookup()
 {
     if (!EnsureMsgHookInstalled()) {
@@ -273,6 +356,28 @@ std::string LookupMagicName(std::uint32_t msg_id)
         kMagicNameCategory,
         kMagicNameDlc1Category,
         kMagicNameDlc2Category,
+        kGoodsNameCategory,
+        kGoodsNameDlc1Category,
+        kGoodsNameDlc2Category,
+    };
+    for (unsigned int category : kCategories) {
+        for (unsigned int version = kMessageVersion; version <= kMaxMessageVersion; ++version) {
+            const wchar_t* result = lookup(repo, version, category, static_cast<int>(msg_id));
+            std::string name = Utf8FromWide(result);
+            if (!name.empty()) return name;
+        }
+    }
+    return {};
+}
+
+std::string LookupGoodsName(std::uint32_t msg_id)
+{
+    const auto lookup = GetMsgLookup();
+    if (!lookup) return {};
+    void* const repo = GetMsgRepositoryInstance();
+    if (!repo) return {};
+
+    constexpr unsigned int kCategories[] = {
         kGoodsNameCategory,
         kGoodsNameDlc1Category,
         kGoodsNameDlc2Category,
@@ -357,6 +462,42 @@ ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id)
     std::lock_guard lock(g_cache_mutex);
     g_metadata_cache[spell_id] = metadata;
 
+    return metadata;
+}
+
+ResolvedItemMetadata ResolveItemMetadata(std::uint32_t item_id)
+{
+    {
+        std::lock_guard lock(g_cache_mutex);
+        if (const auto it = g_item_metadata_cache.find(item_id); it != g_item_metadata_cache.end()) {
+            return it->second;
+        }
+    }
+
+    std::string name = LookupGoodsName(item_id);
+    if (name.empty()) {
+        char buf[32] = {};
+        std::snprintf(buf, sizeof(buf), "Item %u", item_id);
+        name = buf;
+    }
+
+    std::uint32_t icon_id = 0;
+    if (!g_solo_param_address) {
+        const auto addr = FindPattern(kSoloParamRepositoryPattern, kSoloParamRepositoryMask);
+        if (addr) g_solo_param_address = ResolveRipRelative(addr, 3, 7);
+    }
+    if (g_solo_param_address) {
+        const auto repo = *reinterpret_cast<const std::uintptr_t*>(g_solo_param_address);
+        if (repo) icon_id = ReadAnyGoodsIconId(repo, item_id);
+    }
+    if (icon_id == 0) icon_id = ReadSeamlessCoopIconId(item_id);
+    ResolvedItemMetadata metadata{
+        .name = std::move(name),
+        .icon_id = icon_id,
+    };
+
+    std::lock_guard lock(g_cache_mutex);
+    g_item_metadata_cache[item_id] = metadata;
     return metadata;
 }
 

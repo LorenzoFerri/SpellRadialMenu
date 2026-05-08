@@ -17,7 +17,13 @@ struct ResolvedSpellMetadata {
     SpellCategory category = SpellCategory::unknown;
 };
 
+struct ResolvedItemMetadata {
+    std::string name;
+    std::uint32_t icon_id = 0;
+};
+
 bool InitializeSpellMetadata();
 ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id);
+ResolvedItemMetadata ResolveItemMetadata(std::uint32_t item_id);
 
 }  // namespace radial_spell_menu

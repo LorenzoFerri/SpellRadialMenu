@@ -548,7 +548,7 @@ void ParseLayouts(const std::vector<std::uint8_t>& bnd)
             rect.y = static_cast<float>(ReadXmlInt(text, pos, "y"));
             rect.w = static_cast<float>(ReadXmlInt(text, pos, "width"));
             rect.h = static_cast<float>(ReadXmlInt(text, pos, "height"));
-            if (id != 0 && rect.w > 0.0f && rect.h > 0.0f) {
+            if (id != 0 && rect.w > 0.0f && rect.h > 0.0f && g_icons.find(id) == g_icons.end()) {
                 if (atlas_index >= g_atlases.size()) atlas_index = FindOrAddAtlas(atlas_name);
                 if (atlas_index < g_atlases.size()) g_icons[id] = {atlas_index, rect};
             }
@@ -709,7 +709,7 @@ bool TryInitialize(
     bool saw_assets = false;
     bool uploaded_any = false;
     const char* selected_label = nullptr;
-    std::size_t selected_uploaded_count = 0;
+    std::size_t total_uploaded_count = 0;
     for (const Candidate& candidate : candidates) {
         std::vector<std::uint8_t> tpf_dcx;
         std::vector<std::uint8_t> sblyt_dcx;
@@ -735,10 +735,11 @@ bool TryInitialize(
             continue;
         }
 
-        ResetLoadedIconState();
+        const std::size_t first_candidate_atlas = g_atlas_count;
+        if (!uploaded_any) ResetLoadedIconState();
         ParseLayouts(sblyt);
         std::size_t uploaded_count = 0;
-        for (std::size_t i = 0; i < g_atlas_count; ++i) {
+        for (std::size_t i = first_candidate_atlas; i < g_atlas_count; ++i) {
             std::vector<std::uint8_t> dds;
             if (!ExtractTpfTexture(tpf, g_atlases[i].name, dds)) continue;
             if (UploadBc7Texture(device, queue, cpu_srvs[i], g_atlases[i], dds)) {
@@ -748,7 +749,7 @@ bool TryInitialize(
             }
         }
 
-        if (uploaded_count == 0) {
+        if (uploaded_count == 0 && !uploaded_any) {
             Log("Icon loader: %s icon assets parsed but no atlases uploaded (icons=%zu atlases=%zu).",
                 candidate.label,
                 g_icons.size(),
@@ -757,9 +758,10 @@ bool TryInitialize(
             continue;
         }
 
-        selected_label = candidate.label;
-        selected_uploaded_count = uploaded_count;
-        break;
+        if (uploaded_count != 0) {
+            if (!selected_label) selected_label = candidate.label;
+            total_uploaded_count += uploaded_count;
+        }
     }
 
     if (!saw_assets) return false;
@@ -775,7 +777,7 @@ bool TryInitialize(
         selected_label ? selected_label : "unknown",
         g_icons.size(),
         g_atlas_count,
-        selected_uploaded_count);
+        total_uploaded_count);
     return true;
 }
 
@@ -789,7 +791,9 @@ radial_menu::IconTextureInfo Resolve(std::uint32_t icon_id)
         resolved_icon_id = icon_id + 2000u;
         it = g_icons.find(resolved_icon_id);
     }
-    if (it == g_icons.end()) return {};
+    if (it == g_icons.end()) {
+        return {};
+    }
 
     const IconEntry& entry = it->second;
     if (entry.atlas_index >= g_atlas_count) return {};
