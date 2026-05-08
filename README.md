@@ -1,6 +1,6 @@
 # RadialMenu
 
-RadialMenu is an Elden Ring ModEngine 3 DLL that adds radial menus for spells and quick items.
+RadialMenu is an Elden Ring DLL mod that adds radial menus for spells and quick items.
 
 ![RadialMenu screenshot](Screenshot.png)
 
@@ -8,10 +8,13 @@ RadialMenu is an Elden Ring ModEngine 3 DLL that adds radial menus for spells an
 
 - Hold `D-pad Up` to open a radial menu for memorized spells.
 - Hold `D-pad Down` to open a radial menu for quick items.
+- Hold `Tab` to open the spell radial menu with keyboard and mouse.
+- Hold `Caps Lock` to open the quick item radial menu with keyboard and mouse.
 - Select with the right stick and release the held D-pad direction to confirm.
+- Select with mouse movement and release the held keyboard key to confirm.
 - Short D-pad taps pass through to the game, so vanilla cycling still works.
 - Spell and item names are resolved from the game's runtime message repository.
-- Spell/item icons are resolved from runtime params and game/mod icon assets.
+- Spell/item icons are resolved from runtime params and loader-backed game/mod icon assets.
 - The UI font is embedded in the DLL; no loose font or texture files are required.
 
 ## Controls
@@ -23,12 +26,16 @@ RadialMenu is an Elden Ring ModEngine 3 DLL that adds radial menus for spells an
 | Right stick | Select radial entry |
 | Release held D-pad direction | Confirm selected entry |
 | Tap `D-pad Up` / `D-pad Down` | Pass through as normal game input |
+| Hold `Tab` | Open spell radial menu |
+| Hold `Caps Lock` | Open quick item radial menu |
+| Mouse movement | Select radial entry |
+| Release held keyboard key | Confirm selected entry |
 
 ## Requirements
 
 - Elden Ring on Steam.
-- ModEngine 3.
-- An XInput-compatible controller.
+- ModEngine 3, or another compatible DLL loader such as ModEngine 2.
+- An XInput-compatible controller, or keyboard and mouse.
 - Easy Anti-Cheat disabled, as required for DLL mods.
 
 ## Installation
@@ -79,6 +86,15 @@ ImGui ready
 
 `Icon loader ready ...` appears after gameplay is ready and icon assets are warmed, not necessarily at process startup.
 
+For modded icon troubleshooting, useful lines include:
+
+```text
+Asset reader: read icon asset through loader filesystem override.
+Asset reader: read icon asset through mounted game VFS.
+Icon loader: low/hi assets read ...
+Icon loader ready ...
+```
+
 ## Building
 
 End users should use the release zip. To build from source on Linux:
@@ -125,13 +141,12 @@ src/game/state/
   singleton_resolver.*        shared singleton static-address resolver
 
 src/input/
-  input_hook.*                XInput hook installation
-  radial_input.*              radial hold/tap/selection state machine
+  input_hook.*                XInput and raw mouse input hooks
+  radial_input.*              controller and keyboard/mouse radial state machine
 
 src/render/assets/
   dcx.*                       DCX/KRAK/DFLT decompression
   icon_assets.*               icon layout and TPF parsing
-  loose_asset_reader.*        loose mod asset lookup near the DLL
 
 src/render/d3d/
   dx12_hook.*                 Present/ECL hooks and ImGui rendering
@@ -141,6 +156,11 @@ src/render/d3d/
 src/render/icons/
   icon_loader.*               icon atlas loading and UV lookup
 
+src/render/vfs/
+  asset_reader.*              loader-backed/game VFS asset read orchestration
+  game_vfs.*                  Dantelion VFS layout and device discovery
+  path_utils.*                path normalization and disk reads
+
 src/render/ui/
   radial_menu.*               radial menu state and public UI API
   radial_menu_draw.*          radial menu layout and draw primitives
@@ -149,13 +169,13 @@ src/render/ui/
 
 ## Runtime Design
 
-The DLL is loaded by ModEngine 3 after game initialization. Startup installs MinHook, initializes game-data access, installs the asset reader hook, installs the XInput hook, and installs D3D12 hooks.
+The DLL is loaded after game initialization. Startup installs MinHook, initializes game-data access, installs the asset reader hook, installs the XInput/raw mouse hooks, and installs D3D12 hooks.
 
-Input is handled by hooking `XInputGetState`. D-pad holds open a radial menu, right-stick movement selects a radial entry, and releasing the held D-pad direction confirms the selected spell or item. Spell and quick-item selection are direct game-memory writes; synthetic input is only used to replay short taps.
+Controller input is handled by hooking `XInputGetState`. D-pad holds open a radial menu, right-stick movement selects a radial entry, and releasing the held D-pad direction confirms the selected spell or item. Keyboard/mouse input is polled during rendering, and raw mouse deltas are suppressed while a radial menu is open so the camera does not move. Spell and quick-item selection are direct game-memory writes; synthetic input is only used to replay short D-pad taps.
 
 Rendering is handled by hooking `IDXGISwapChain::Present` and `ID3D12CommandQueue::ExecuteCommandLists`. The command queue hook captures the real direct graphics queue. ImGui initializes lazily on the first suitable `Present` call. The overlay draws only while a radial menu is open.
 
-Metadata is resolved from runtime game systems instead of static data files. Names come from `MsgRepository`; spell and item icons come from runtime params and icon asset layouts. Modded icon assets are supported through game VFS reads and loose mod asset fallback paths.
+Metadata is resolved from runtime game systems instead of static data files. Names come from `MsgRepository`; spell and item icons come from runtime params and icon asset layouts. Modded icon assets are supported through loader-backed filesystem overrides and mounted game VFS reads, avoiding hardcoded mod-folder assumptions.
 
 ## Notes
 
