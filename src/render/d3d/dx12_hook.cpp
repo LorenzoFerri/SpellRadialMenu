@@ -19,7 +19,7 @@
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-namespace radial_spell_menu::dx12_hook {
+namespace radial_menu_mod::dx12_hook {
 namespace {
 
 // ── per-frame D3D12 resources ─────────────────────────────────────────────
@@ -301,4 +301,4 @@ void Shutdown()
     }
 }
 
-} // namespace radial_spell_menu::dx12_hook
+} // namespace radial_menu_mod::dx12_hook

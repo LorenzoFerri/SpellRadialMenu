@@ -7,7 +7,7 @@
 
 #include <array>
 
-namespace radial_spell_menu::message_repository {
+namespace radial_menu_mod::message_repository {
 namespace {
 
 constexpr std::array<std::uint8_t, 15> kMsgRepositoryInstancePattern = {
@@ -154,4 +154,4 @@ std::string LookupGoodsName(std::uint32_t msg_id)
     return LookupName(msg_id, kCategories, std::size(kCategories));
 }
 
-}  // namespace radial_spell_menu::message_repository
+}  // namespace radial_menu_mod::message_repository

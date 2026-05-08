@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-namespace radial_spell_menu::seamless_coop_metadata {
+namespace radial_menu_mod::seamless_coop_metadata {
 
 std::uint32_t ResolveIconId(std::uint32_t item_id);
 
-}  // namespace radial_spell_menu::seamless_coop_metadata
+}  // namespace radial_menu_mod::seamless_coop_metadata

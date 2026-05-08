@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace radial_spell_menu::asset_reader {
+namespace radial_menu_mod::asset_reader {
 namespace {
 
 template <typename T>
@@ -314,4 +314,4 @@ void Shutdown()
     g_captured_allocator = nullptr;
 }
 
-}  // namespace radial_spell_menu::asset_reader
+}  // namespace radial_menu_mod::asset_reader

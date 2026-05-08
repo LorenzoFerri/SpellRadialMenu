@@ -3,7 +3,7 @@
 #include "core/common.h"
 #include "game/equipment/equip_access.h"
 
-namespace radial_spell_menu {
+namespace radial_menu_mod {
 
 namespace {
 
@@ -157,4 +157,4 @@ bool SwitchToQuickItemSlot(std::size_t slot_index)
     return false;
 }
 
-}  // namespace radial_spell_menu
+}  // namespace radial_menu_mod

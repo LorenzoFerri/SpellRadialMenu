@@ -2,7 +2,7 @@
 build/
 natives/*.dll
 natives/*.pdb
-RadialSpellMenu.dll
+/*.dll
 
 # Bundled binary toolchain and tools (too large for git)
 toolchains/

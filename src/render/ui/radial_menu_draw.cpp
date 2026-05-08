@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace radial_spell_menu::radial_menu {
+namespace radial_menu_mod::radial_menu {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
@@ -186,7 +186,7 @@ void BeginOverlayWindow(const RadialLayout& layout)
 
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBackground;
-    ImGui::Begin("RadialSpellMenuOverlay", nullptr, flags);
+    ImGui::Begin("RadialMenuOverlay", nullptr, flags);
 }
 
 void DrawSpellBadge(ImDrawList* draw_list, const ImVec2& center, const SpellSlot& slot, float scale,
@@ -299,4 +299,4 @@ void DrawMenuContents(const std::vector<SpellSlot>& slots, const char* title, co
     ImGui::End();
 }
 
-}  // namespace radial_spell_menu::radial_menu
+}  // namespace radial_menu_mod::radial_menu

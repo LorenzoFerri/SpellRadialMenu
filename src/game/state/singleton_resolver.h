@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-namespace radial_spell_menu::singleton_resolver {
+namespace radial_menu_mod::singleton_resolver {
 
 std::uintptr_t ResolveSingletonStaticAddress(const char* singleton_name);
 
-}  // namespace radial_spell_menu::singleton_resolver
+}  // namespace radial_menu_mod::singleton_resolver

@@ -6,7 +6,7 @@
 
 #include <cstring>
 
-namespace radial_spell_menu::singleton_resolver {
+namespace radial_menu_mod::singleton_resolver {
 namespace {
 
 struct SectionInfo {
@@ -266,4 +266,4 @@ std::uintptr_t ResolveSingletonStaticAddress(const char* singleton_name)
     return 0;
 }
 
-}  // namespace radial_spell_menu::singleton_resolver
+}  // namespace radial_menu_mod::singleton_resolver

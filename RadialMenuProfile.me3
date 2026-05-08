@@ -1,11 +1,11 @@
 profileVersion = "v1"
-savefile = "ER0000-RadialSpellMenu.sl2"
+savefile = "ER0000-RadialMenu.sl2"
 start_online = false
 
 [[supports]]
 game = "eldenring"
 
 [[natives]]
-path = 'RadialSpellMenu.dll'
+path = 'RadialMenu.dll'
 optional = false
 load_early = false

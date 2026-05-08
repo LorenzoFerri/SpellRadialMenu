@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   build:
-    name: Build RadialSpellMenu release package
+    name: Build RadialMenu release package
     runs-on: ubuntu-24.04
 
     steps:
@@ -34,17 +34,17 @@ jobs:
 
       - name: Package release zip
         run: |
-          mkdir -p dist/RadialSpellMenu
-          cp natives/RadialSpellMenu.dll dist/RadialSpellMenu/
-          cp RadialSpellMenuProfile.me3 dist/RadialSpellMenu/
+          mkdir -p dist/RadialMenu
+          cp natives/RadialMenu.dll dist/RadialMenu/
+          cp RadialMenuProfile.me3 dist/RadialMenu/
           cd dist
-          zip -r RadialSpellMenu.zip RadialSpellMenu
+          zip -r RadialMenu.zip RadialMenu
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RadialSpellMenu
-          path: dist/RadialSpellMenu.zip
+          name: RadialMenu
+          path: dist/RadialMenu.zip
           if-no-files-found: error
 
       - name: Create release for version tag
@@ -52,12 +52,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/RadialSpellMenu.zip \
+          gh release create "${GITHUB_REF_NAME}" dist/RadialMenu.zip \
             --title "${GITHUB_REF_NAME}" \
-            --notes "RadialSpellMenu ${GITHUB_REF_NAME}"
+            --notes "RadialMenu ${GITHUB_REF_NAME}"
 
       - name: Attach zip to release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/RadialSpellMenu.zip --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/RadialMenu.zip --clobber

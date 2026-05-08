@@ -9,28 +9,28 @@
 
 namespace {
 
-DWORD WINAPI InitializeRadialSpellMenu(LPVOID)
+DWORD WINAPI InitializeRadialMenu(LPVOID)
 {
     if (MH_Initialize() != MH_OK) {
-        radial_spell_menu::Log("MinHook initialization failed.");
+        radial_menu_mod::Log("MinHook initialization failed.");
         return 0;
     }
 
-    radial_spell_menu::asset_reader::Install();
-    radial_spell_menu::InitializeSpellManager();
-    radial_spell_menu::input_hook::Install();
-    radial_spell_menu::dx12_hook::Install();
-    radial_spell_menu::Log("Initialization completed.");
+    radial_menu_mod::asset_reader::Install();
+    radial_menu_mod::InitializeSpellManager();
+    radial_menu_mod::input_hook::Install();
+    radial_menu_mod::dx12_hook::Install();
+    radial_menu_mod::Log("Initialization completed.");
     return 0;
 }
 
-void ShutdownRadialSpellMenu()
+void ShutdownRadialMenu()
 {
-    radial_spell_menu::dx12_hook::Shutdown();
-    radial_spell_menu::asset_reader::Shutdown();
-    radial_spell_menu::input_hook::Shutdown();
+    radial_menu_mod::dx12_hook::Shutdown();
+    radial_menu_mod::asset_reader::Shutdown();
+    radial_menu_mod::input_hook::Shutdown();
     MH_Uninitialize();
-    radial_spell_menu::Log("Shutdown completed.");
+    radial_menu_mod::Log("Shutdown completed.");
 }
 
 }  // namespace
@@ -40,14 +40,14 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
     switch (reason) {
     case DLL_PROCESS_ATTACH: {
         DisableThreadLibraryCalls(module);
-        HANDLE thread = CreateThread(nullptr, 0, &InitializeRadialSpellMenu, nullptr, 0, nullptr);
+        HANDLE thread = CreateThread(nullptr, 0, &InitializeRadialMenu, nullptr, 0, nullptr);
         if (thread != nullptr) {
             CloseHandle(thread);
         }
         break;
     }
     case DLL_PROCESS_DETACH:
-        ShutdownRadialSpellMenu();
+        ShutdownRadialMenu();
         break;
     default:
         break;

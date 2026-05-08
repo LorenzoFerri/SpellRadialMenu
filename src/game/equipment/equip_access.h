@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace radial_spell_menu::equip_access {
+namespace radial_menu_mod::equip_access {
 
 constexpr std::size_t kMaxSpellSlots = 14;
 constexpr std::size_t kMaxQuickItemSlots = 10;
@@ -28,4 +28,4 @@ std::uintptr_t ResolveEquipItemData();
 int ResolveCurrentSpellEntrySlot(std::uintptr_t equip_magic_data);
 std::uint32_t ReadQuickItemId(std::uintptr_t equip_item_data, std::size_t slot);
 
-}  // namespace radial_spell_menu::equip_access
+}  // namespace radial_menu_mod::equip_access

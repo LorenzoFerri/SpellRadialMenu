@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-namespace radial_spell_menu::loose_asset_reader {
+namespace radial_menu_mod::loose_asset_reader {
 namespace {
 
 bool g_logged_disk_fallback = false;
@@ -96,4 +96,4 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
     return false;
 }
 
-}  // namespace radial_spell_menu::loose_asset_reader
+}  // namespace radial_menu_mod::loose_asset_reader

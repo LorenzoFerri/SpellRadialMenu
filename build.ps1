@@ -56,4 +56,4 @@ cmake --build $BuildDir --config Release
 
 Write-Host ''
 Write-Host 'Built DLL:'
-Write-Host "  $(Join-Path $ProjectRoot 'natives/RadialSpellMenu.dll')"
+Write-Host "  $(Join-Path $ProjectRoot 'natives/RadialMenu.dll')"

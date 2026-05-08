@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace radial_spell_menu {
+namespace radial_menu_mod {
 
 struct SpellSlot {
     std::size_t slot_index = 0;
@@ -28,4 +28,4 @@ int GetCurrentQuickItemSlot();
 std::vector<SpellSlot> GetQuickItems();
 bool SwitchToQuickItemSlot(std::size_t slot_index);
 
-}  // namespace radial_spell_menu
+}  // namespace radial_menu_mod

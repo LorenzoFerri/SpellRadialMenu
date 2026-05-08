@@ -1,6 +1,6 @@
 #pragma once
 
-namespace radial_spell_menu::dx12_vtable {
+namespace radial_menu_mod::dx12_vtable {
 
 struct HookTargets {
     void* present = nullptr;
@@ -9,4 +9,4 @@ struct HookTargets {
 
 bool DiscoverHookTargets(HookTargets& targets);
 
-}  // namespace radial_spell_menu::dx12_vtable
+}  // namespace radial_menu_mod::dx12_vtable

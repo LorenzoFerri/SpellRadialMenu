@@ -2,7 +2,7 @@
 
 #include <array>
 
-namespace radial_spell_menu::equip_access {
+namespace radial_menu_mod::equip_access {
 namespace {
 
 constexpr std::array<std::uint8_t, 18> kGameDataManPattern = {
@@ -131,4 +131,4 @@ std::uint32_t ReadQuickItemId(std::uintptr_t equip_item_data, std::size_t slot)
     return ReadInventoryEntryGoodsId(normal_items_head, normal_index, normal_capacity);
 }
 
-}  // namespace radial_spell_menu::equip_access
+}  // namespace radial_menu_mod::equip_access

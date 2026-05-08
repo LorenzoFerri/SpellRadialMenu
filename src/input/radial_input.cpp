@@ -8,7 +8,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace radial_spell_menu::radial_input {
+namespace radial_menu_mod::radial_input {
 namespace {
 
 constexpr ULONGLONG kHoldThresholdMs = 180;
@@ -277,4 +277,4 @@ const char* GetOpenMenuControls()
         : "Right Stick Rotate   Release D-pad Up Confirm";
 }
 
-}  // namespace radial_spell_menu::radial_input
+}  // namespace radial_menu_mod::radial_input

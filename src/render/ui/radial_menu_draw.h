@@ -2,7 +2,7 @@
 
 #include "render/ui/radial_menu.h"
 
-namespace radial_spell_menu::radial_menu {
+namespace radial_menu_mod::radial_menu {
 
 void DrawMenuContents(
     const std::vector<SpellSlot>& slots,
@@ -11,4 +11,4 @@ void DrawMenuContents(
     int selected_slot,
     IconTextureInfo(*icon_texture_resolver)(std::uint32_t icon_id));
 
-}  // namespace radial_spell_menu::radial_menu
+}  // namespace radial_menu_mod::radial_menu

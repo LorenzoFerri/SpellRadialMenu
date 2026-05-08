@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace radial_spell_menu::icon_loader {
+namespace radial_menu_mod::icon_loader {
 namespace {
 
 struct IconEntry {
@@ -196,4 +196,4 @@ void Shutdown()
     g_failed = false;
 }
 
-}  // namespace radial_spell_menu::icon_loader
+}  // namespace radial_menu_mod::icon_loader

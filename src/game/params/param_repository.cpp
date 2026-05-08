@@ -5,7 +5,7 @@
 #include <array>
 #include <string>
 
-namespace radial_spell_menu::param_repository {
+namespace radial_menu_mod::param_repository {
 namespace {
 
 constexpr std::array<std::uint8_t, 24> kSoloParamRepositoryPattern = {
@@ -106,4 +106,4 @@ const std::uint8_t* FindRowData(std::uintptr_t repo, std::uintptr_t param_offset
     return nullptr;
 }
 
-}  // namespace radial_spell_menu::param_repository
+}  // namespace radial_menu_mod::param_repository

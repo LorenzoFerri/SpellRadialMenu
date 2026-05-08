@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace radial_spell_menu::d3d_texture_upload {
+namespace radial_menu_mod::d3d_texture_upload {
 
 struct UploadedTexture {
     ID3D12Resource* resource = nullptr;
@@ -20,4 +20,4 @@ bool UploadBc7Texture(
     const std::vector<std::uint8_t>& dds,
     UploadedTexture& texture);
 
-}  // namespace radial_spell_menu::d3d_texture_upload
+}  // namespace radial_menu_mod::d3d_texture_upload

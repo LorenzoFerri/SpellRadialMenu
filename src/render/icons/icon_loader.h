@@ -4,7 +4,7 @@
 
 #include <d3d12.h>
 
-namespace radial_spell_menu::icon_loader {
+namespace radial_menu_mod::icon_loader {
 
 constexpr std::size_t kMaxAtlases = 32;
 
@@ -17,4 +17,4 @@ bool TryInitialize(
 radial_menu::IconTextureInfo Resolve(std::uint32_t icon_id);
 void Shutdown();
 
-}  // namespace radial_spell_menu::icon_loader
+}  // namespace radial_menu_mod::icon_loader

@@ -15,7 +15,7 @@ bash build.sh
 Build output:
 
 ```text
-natives/RadialSpellMenu.dll
+natives/RadialMenu.dll
 ```
 
 ## Testing
@@ -23,16 +23,16 @@ natives/RadialSpellMenu.dll
 There is no automated test suite. Verify by building and running in-game through ModEngine 3:
 
 ```bash
-me3 launch --profile "./RadialSpellMenuProfile.me3"
+me3 launch --profile "./RadialMenuProfile.me3"
 ```
 
 For local ERR testing, the DLL is commonly copied to:
 
 ```text
-/home/faith/ERRv2.2.4.4/dll/offline/RadialSpellMenu.dll
+/home/faith/ERRv2.2.4.4/dll/offline/RadialMenu.dll
 ```
 
-The log is written next to the DLL as `RadialSpellMenu.log` and also to the debug output stream.
+The log is written next to the DLL as `RadialMenu.log` and also to the debug output stream.
 
 ## Architecture
 
@@ -147,5 +147,5 @@ After code changes:
 
 1. Run `bash build.sh`.
 2. Run `git diff --check`.
-3. If testing locally with ERR, copy `natives/RadialSpellMenu.dll` to the ERR offline DLL folder.
+3. If testing locally with ERR, copy `natives/RadialMenu.dll` to the ERR offline DLL folder.
 4. In game, verify spell radial, quick-item radial, short D-pad taps, icon loading, and first-open behavior.

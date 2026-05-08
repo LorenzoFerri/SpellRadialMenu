@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-namespace radial_spell_menu::gameplay_state {
+namespace radial_menu_mod::gameplay_state {
 namespace {
 
 std::uintptr_t g_cs_fe_man_static_address = 0;
@@ -45,4 +45,4 @@ bool IsNormalGameplayHudState()
     return *reinterpret_cast<const std::uint8_t*>(fe_man + kHudStateOffset) == kHudStateDefault;
 }
 
-}  // namespace radial_spell_menu::gameplay_state
+}  // namespace radial_menu_mod::gameplay_state

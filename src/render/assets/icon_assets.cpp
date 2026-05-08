@@ -8,7 +8,7 @@
 #include <cstring>
 #include <utility>
 
-namespace radial_spell_menu::icon_assets {
+namespace radial_menu_mod::icon_assets {
 namespace {
 
 std::uint32_t ReadLe32(const std::vector<std::uint8_t>& bytes, std::size_t offset)
@@ -192,4 +192,4 @@ std::vector<LayoutIcon> ParseLayoutIcons(const std::vector<std::uint8_t>& bnd)
     return icons;
 }
 
-}  // namespace radial_spell_menu::icon_assets
+}  // namespace radial_menu_mod::icon_assets

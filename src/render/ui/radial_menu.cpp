@@ -4,7 +4,7 @@
 
 #include <cmath>
 
-namespace radial_spell_menu::radial_menu {
+namespace radial_menu_mod::radial_menu {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
@@ -63,4 +63,4 @@ void Draw(const std::vector<SpellSlot>& slots, const char* title, const char* co
     DrawMenuContents(slots, title, controls, g_selected_slot, g_icon_texture_resolver);
 }
 
-}  // namespace radial_spell_menu::radial_menu
+}  // namespace radial_menu_mod::radial_menu

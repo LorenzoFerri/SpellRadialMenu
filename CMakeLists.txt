@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(RadialSpellMenu LANGUAGES C CXX)
+project(RadialMenu LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -93,7 +93,7 @@ set(RSM_VENDOR_SOURCES
     ${MINHOOK_ROOT}/src/hde/hde64.c
 )
 
-add_library(RadialSpellMenu SHARED
+add_library(RadialMenu SHARED
     ${RSM_CORE_SOURCES}
     ${RSM_GAME_SOURCES}
     ${RSM_INPUT_SOURCES}
@@ -101,7 +101,7 @@ add_library(RadialSpellMenu SHARED
     ${RSM_VENDOR_SOURCES}
 )
 
-target_include_directories(RadialSpellMenu PRIVATE
+target_include_directories(RadialMenu PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
     "${IMGUI_ROOT}"
     "${IMGUI_ROOT}/backends"
@@ -110,7 +110,7 @@ target_include_directories(RadialSpellMenu PRIVATE
     "${MINHOOK_ROOT}/src/hde"
 )
 
-target_compile_definitions(RadialSpellMenu PRIVATE
+target_compile_definitions(RadialMenu PRIVATE
     UNICODE
     _UNICODE
     WIN32_LEAN_AND_MEAN
@@ -118,11 +118,11 @@ target_compile_definitions(RadialSpellMenu PRIVATE
     IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
 )
 
-target_compile_options(RadialSpellMenu PRIVATE
+target_compile_options(RadialMenu PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
 )
 
-target_link_libraries(RadialSpellMenu PRIVATE
+target_link_libraries(RadialMenu PRIVATE
     d3d12
     d3dcompiler
     dxgi
@@ -134,14 +134,14 @@ target_link_libraries(RadialSpellMenu PRIVATE
 )
 
 if(MINGW)
-    target_link_options(RadialSpellMenu PRIVATE
+    target_link_options(RadialMenu PRIVATE
         -static-libgcc
         -static-libstdc++
     )
 endif()
 
-set_target_properties(RadialSpellMenu PROPERTIES
-    OUTPUT_NAME "RadialSpellMenu"
+set_target_properties(RadialMenu PROPERTIES
+    OUTPUT_NAME "RadialMenu"
     PREFIX ""
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/natives"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/natives"

@@ -7,7 +7,7 @@
 
 #include <vector>
 
-namespace radial_spell_menu::radial_input {
+namespace radial_menu_mod::radial_input {
 
 void Reset();
 void HandleControllerState(DWORD user_index, XINPUT_STATE* state);
@@ -15,4 +15,4 @@ const std::vector<SpellSlot>& GetOpenSpellSlots();
 const char* GetOpenMenuTitle();
 const char* GetOpenMenuControls();
 
-}  // namespace radial_spell_menu::radial_input
+}  // namespace radial_menu_mod::radial_input

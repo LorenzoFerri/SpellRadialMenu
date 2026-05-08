@@ -1,8 +1,8 @@
-# RadialSpellMenu
+# RadialMenu
 
-RadialSpellMenu is an Elden Ring ModEngine 3 DLL that adds radial menus for spells and quick items.
+RadialMenu is an Elden Ring ModEngine 3 DLL that adds radial menus for spells and quick items.
 
-![RadialSpellMenu screenshot](Screenshot.png)
+![RadialMenu screenshot](Screenshot.png)
 
 ## Features
 
@@ -33,29 +33,29 @@ RadialSpellMenu is an Elden Ring ModEngine 3 DLL that adds radial menus for spel
 
 ## Installation
 
-Download `RadialSpellMenu.zip` from the latest release:
+Download `RadialMenu.zip` from the latest release:
 
-`https://github.com/LorenzoFerri/SpellRadialMenu/releases/latest`
+`https://github.com/LorenzoFerri/RadialMenu/releases/latest`
 
 The zip contains:
 
 ```text
-RadialSpellMenu/
-  RadialSpellMenu.dll
-  RadialSpellMenuProfile.me3
+RadialMenu/
+  RadialMenu.dll
+  RadialMenuProfile.me3
 ```
 
 Launch the included profile with ModEngine 3:
 
 ```bash
-me3 launch --profile "/path/to/RadialSpellMenu/RadialSpellMenuProfile.me3"
+me3 launch --profile "/path/to/RadialMenu/RadialMenuProfile.me3"
 ```
 
-To add the DLL to an existing ModEngine 3 profile, place `RadialSpellMenu.dll` where the profile can find it and add:
+To add the DLL to an existing ModEngine 3 profile, place `RadialMenu.dll` where the profile can find it and add:
 
 ```toml
 [[natives]]
-path = 'RadialSpellMenu.dll'
+path = 'RadialMenu.dll'
 optional = false
 load_early = false
 ```
@@ -64,7 +64,7 @@ load_early = false
 
 ## Logs
 
-The mod writes `RadialSpellMenu.log` next to `RadialSpellMenu.dll`.
+The mod writes `RadialMenu.log` next to `RadialMenu.dll`.
 
 Useful startup lines include:
 
@@ -84,8 +84,8 @@ ImGui ready
 End users should use the release zip. To build from source on Linux:
 
 ```bash
-git clone <repo-url> RadialSpellMenu
-cd RadialSpellMenu
+git clone <repo-url> RadialMenu
+cd RadialMenu
 bash build.sh
 ```
 
@@ -94,7 +94,7 @@ bash build.sh
 Build output:
 
 ```text
-natives/RadialSpellMenu.dll
+natives/RadialMenu.dll
 ```
 
 The project cross-compiles a Windows DLL. Do not attempt a native Linux build.

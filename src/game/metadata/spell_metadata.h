@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace radial_spell_menu {
+namespace radial_menu_mod {
 
 enum class SpellCategory : std::uint8_t {
     unknown = 0,
@@ -26,4 +26,4 @@ bool InitializeSpellMetadata();
 ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id);
 ResolvedItemMetadata ResolveItemMetadata(std::uint32_t item_id);
 
-}  // namespace radial_spell_menu
+}  // namespace radial_menu_mod

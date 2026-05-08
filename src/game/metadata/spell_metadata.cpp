@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace radial_spell_menu {
+namespace radial_menu_mod {
 
 namespace {
 
@@ -193,4 +193,4 @@ ResolvedItemMetadata ResolveItemMetadata(std::uint32_t item_id)
     return metadata;
 }
 
-}  // namespace radial_spell_menu
+}  // namespace radial_menu_mod

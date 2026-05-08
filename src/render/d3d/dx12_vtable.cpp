@@ -6,7 +6,7 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 
-namespace radial_spell_menu::dx12_vtable {
+namespace radial_menu_mod::dx12_vtable {
 
 bool DiscoverHookTargets(HookTargets& targets)
 {
@@ -74,4 +74,4 @@ bool DiscoverHookTargets(HookTargets& targets)
     return targets.present != nullptr && targets.execute_command_lists != nullptr;
 }
 
-}  // namespace radial_spell_menu::dx12_vtable
+}  // namespace radial_menu_mod::dx12_vtable

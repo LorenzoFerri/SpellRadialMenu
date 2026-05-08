@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace radial_spell_menu::dcx {
+namespace radial_menu_mod::dcx {
 namespace {
 
 using OodleDecompressFn = long long(__stdcall *)(
@@ -331,4 +331,4 @@ bool Decompress(const std::vector<std::uint8_t>& dcx, std::vector<std::uint8_t>&
     return DecompressKrak(dcx, out) || DecompressDflt(dcx, out, dflt_error);
 }
 
-}  // namespace radial_spell_menu::dcx
+}  // namespace radial_menu_mod::dcx

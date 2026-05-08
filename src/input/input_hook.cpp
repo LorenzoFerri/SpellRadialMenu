@@ -9,7 +9,7 @@
 #include <windows.h>
 #include <xinput.h>
 
-namespace radial_spell_menu::input_hook {
+namespace radial_menu_mod::input_hook {
 
 namespace {
 
@@ -88,7 +88,7 @@ void Shutdown()
 
 bool IsMenuOpen()
 {
-    return radial_spell_menu::radial_menu::IsOpen();
+    return radial_menu::IsOpen();
 }
 
 bool IsGameplayReady()
@@ -111,4 +111,4 @@ const char* GetOpenMenuControls()
     return radial_input::GetOpenMenuControls();
 }
 
-}  // namespace radial_spell_menu::input_hook
+}  // namespace radial_menu_mod::input_hook

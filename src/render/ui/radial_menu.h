@@ -4,7 +4,7 @@
 
 #include <imgui.h>
 
-namespace radial_spell_menu::radial_menu {
+namespace radial_menu_mod::radial_menu {
 
 struct IconTextureInfo {
     ImTextureID texture = ImTextureID{};
@@ -20,4 +20,4 @@ int GetSelectedSlot();
 void UpdateSelectionFromStick(float stick_x, float stick_y, std::size_t slot_count);
 void Draw(const std::vector<SpellSlot>& slots, const char* title, const char* controls);
 
-}  // namespace radial_spell_menu::radial_menu
+}  // namespace radial_menu_mod::radial_menu

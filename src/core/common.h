@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cwchar>
 
-namespace radial_spell_menu {
+namespace radial_menu_mod {
 
 inline void Log(const char* format, ...)
 {
@@ -20,11 +20,11 @@ inline void Log(const char* format, ...)
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
 
-    OutputDebugStringA("[RadialSpellMenu] ");
+    OutputDebugStringA("[RadialMenu] ");
     OutputDebugStringA(buffer);
     OutputDebugStringA("\n");
 
-    // Write to RadialSpellMenu.log next to the DLL
+    // Write to RadialMenu.log next to the DLL
     wchar_t log_path[MAX_PATH] = {};
     HMODULE module = nullptr;
     GetModuleHandleExW(
@@ -35,7 +35,7 @@ inline void Log(const char* format, ...)
     wchar_t* sep = wcsrchr(module_path, L'\\');
     if (sep) {
         *(sep + 1) = L'\0';
-        swprintf(log_path, MAX_PATH, L"%lsRadialSpellMenu.log", module_path);
+        swprintf(log_path, MAX_PATH, L"%lsRadialMenu.log", module_path);
         const DWORD disposition = log_initialized ? OPEN_ALWAYS : CREATE_ALWAYS;
         HANDLE file = CreateFileW(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                   nullptr, disposition, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -116,4 +116,4 @@ inline void SafeRelease(T*& p)
     if (p) { p->Release(); p = nullptr; }
 }
 
-}  // namespace radial_spell_menu
+}  // namespace radial_menu_mod

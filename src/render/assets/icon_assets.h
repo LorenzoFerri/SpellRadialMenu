@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace radial_spell_menu::icon_assets {
+namespace radial_menu_mod::icon_assets {
 
 struct Rect {
     float x = 0.0f;
@@ -23,4 +23,4 @@ bool DecryptData0AesRanges(std::vector<std::uint8_t>& bytes);
 bool ExtractTpfTexture(const std::vector<std::uint8_t>& tpf, const std::string& target_name, std::vector<std::uint8_t>& dds);
 std::vector<LayoutIcon> ParseLayoutIcons(const std::vector<std::uint8_t>& bnd);
 
-}  // namespace radial_spell_menu::icon_assets
+}  // namespace radial_menu_mod::icon_assets

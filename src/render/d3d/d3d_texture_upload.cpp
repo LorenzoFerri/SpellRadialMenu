@@ -6,7 +6,7 @@
 
 #include <cstring>
 
-namespace radial_spell_menu::d3d_texture_upload {
+namespace radial_menu_mod::d3d_texture_upload {
 namespace {
 
 std::uint32_t ReadLe32(const std::vector<std::uint8_t>& bytes, std::size_t offset)
@@ -167,4 +167,4 @@ bool UploadBc7Texture(
     return true;
 }
 
-}  // namespace radial_spell_menu::d3d_texture_upload
+}  // namespace radial_menu_mod::d3d_texture_upload
