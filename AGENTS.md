@@ -1,106 +1,151 @@
-# AGENTS.md — Development Guide for AI Agents
+# AGENTS.md - Development Guide
 
-This document describes how the codebase is structured, how to build and test changes, and where the key logic lives. Read this before making any changes.
-
----
+This file is the working guide for AI agents and maintainers. Read it before changing code.
 
 ## Build
+
+Always build with:
 
 ```bash
 bash build.sh
 ```
 
-Always use `build.sh` — it prepares pinned vendor libraries if missing and selects the right cross-compiler.
+`build.sh` prepares pinned vendor libraries when missing and selects the correct Windows cross-compiler. The project cross-compiles a Windows DLL on Linux with mingw-w64 or llvm-mingw. Do not attempt a native Linux build.
 
-The project cross-compiles a Windows DLL on Linux using mingw-w64 or llvm-mingw. Do **not** attempt a native Linux build.
+Build output:
 
----
+```text
+natives/RadialSpellMenu.dll
+```
 
 ## Testing
 
-There is no automated test suite. The only way to verify behaviour is to build and run the mod in-game via:
+There is no automated test suite. Verify by building and running in-game through ModEngine 3:
 
 ```bash
 me3 launch --profile "./RadialSpellMenuProfile.me3"
 ```
 
-Log output goes to `RadialSpellMenu.log` next to the DLL. Check this file for errors from `Log()` calls. The log is also written to the debug output stream, visible in tools like DebugView on Windows.
+For local ERR testing, the DLL is commonly copied to:
 
----
+```text
+/home/faith/ERRv2.2.4.4/dll/offline/RadialSpellMenu.dll
+```
+
+The log is written next to the DLL as `RadialSpellMenu.log` and also to the debug output stream.
 
 ## Architecture
 
-The mod is a Windows DLL loaded by ModEngine 3 with `load_early = false`. That means the game's D3D12 renderer and all game systems are fully initialised before `DllMain` runs.
+The mod is a Windows DLL loaded by ModEngine 3 with `load_early = false`. The game's D3D12 renderer and game systems are initialized before `DllMain` runs.
 
-### Subsystems (in initialisation order)
+Initialization order:
 
 | File | Responsibility |
 |---|---|
-| `dllmain.cpp` | Entry point. Spawns one thread that calls `MH_Initialize`, then `InitializeSpellManager`, `input_hook::Install`, `dx12_hook::Install` in order. |
-| `common.h` | Header-only utilities: `Log()`, `GetModuleBase()`, `GetModuleSize()`, `FindPattern<N>()`, `ResolveRipRelative()`, `SafeRelease<T>()`. |
-| `spell_metadata.cpp` | Locates `SoloParamRepository` and `MsgRepository` via pattern scan. Reads icon IDs and categories from `MagicParam`. Resolves spell names by calling the game's message lookup function. Caches results. |
-| `spell_manager.cpp` | Locates `GameDataMan` → `GameDataRoot` → `EquipMagicData` via pattern scan. Builds the `SpellSlot` list. Writes `EquipMagicData.selected_slot` for direct spell switching. |
-| `input_hook.cpp` | Hooks `XInputGetState`. Implements hold-to-open logic, right-stick selection, and release-to-confirm. Falls back to synthetic D-pad Up taps if the direct memory write fails. |
-| `dx12_hook.cpp` | Hooks `IDXGISwapChain::Present` and `ID3D12CommandQueue::ExecuteCommandLists`. Initialises ImGui lazily on first Present. Renders the radial menu every frame. |
-| `radial_menu.cpp` | Pure ImGui drawing. Stateless from the D3D12 perspective — receives a `vector<SpellSlot>` each frame. |
-
----
+| `src/core/dllmain.cpp` | Starts one initialization thread and calls `MH_Initialize`, `InitializeSpellManager`, `asset_reader::Install`, `input_hook::Install`, and `dx12_hook::Install`. |
+| `src/core/common.h` | Header-only utilities: logging, module info, pattern scanning, RIP-relative resolution, readable-memory checks, COM release helper. |
+| `src/game/equipment/equip_access.cpp` | Resolves `GameDataMan`, equip data, selected slots, and inventory item IDs. |
+| `src/game/equipment/spell_manager.cpp` | Builds spell and quick-item lists and writes selected spell/item slots. |
+| `src/game/messages/message_repository.cpp` | Resolves `MsgRepository` and localized runtime names. |
+| `src/game/metadata/spell_metadata.cpp` | Resolves spell/item icon IDs and spell categories from runtime params. |
+| `src/game/metadata/seamless_coop_metadata.cpp` | Extracts Seamless Coop item icon IDs from loaded `ersc.dll` code data. |
+| `src/game/params/param_repository.cpp` | Shared runtime param repository and row lookup helpers. |
+| `src/game/state/gameplay_state.cpp` | Checks normal gameplay HUD state through `CSFeMan`. |
+| `src/game/state/singleton_resolver.cpp` | Generic singleton static-address resolver used by gameplay-state code. |
+| `src/input/input_hook.cpp` | Hooks `XInputGetState`. |
+| `src/input/radial_input.cpp` | Owns radial input state, D-pad hold/tap handling, right-stick selection, and open-slot snapshots. |
+| `src/render/vfs/asset_reader.cpp` | Hooks the game VFS file open path and reads game assets. |
+| `src/render/assets/loose_asset_reader.cpp` | Looks for loose mod assets near the DLL when VFS lookup is unavailable. |
+| `src/render/assets/dcx.cpp` | Decompresses DCX/KRAK/DFLT containers. |
+| `src/render/assets/icon_assets.cpp` | Parses icon layouts, TPF entries, and encrypted Data0 icon ranges. |
+| `src/render/icons/icon_loader.cpp` | Coordinates icon asset loading, atlas upload, and icon UV lookup. |
+| `src/render/d3d/dx12_vtable.cpp` | Creates a dummy D3D12 swap chain after game init to discover hook vtable targets. |
+| `src/render/d3d/dx12_hook.cpp` | Hooks `Present` and `ExecuteCommandLists`, initializes ImGui, and renders the overlay. |
+| `src/render/d3d/d3d_texture_upload.cpp` | Uploads BC7 DDS textures and creates SRVs. |
+| `src/render/ui/radial_menu.cpp` | Public radial menu state/API. |
+| `src/render/ui/radial_menu_draw.cpp` | Radial menu layout and ImGui draw-list primitives. |
 
 ## Key Invariants
 
-**`load_early = false` is non-negotiable.** The DX12 hook creates a dummy swap chain to read the `Present` vtable pointer. This only works without deadlocking because the game's swap chain already exists. If this is ever changed to `true`, the dummy swap chain creation will race with the game's own and deadlock.
+- `load_early = false` is required. The dummy swap-chain vtable discovery relies on the game renderer already existing.
+- `HookedECL` must only capture `D3D12_COMMAND_LIST_TYPE_DIRECT` queues. Copy/compute queues are not valid for ImGui rendering.
+- Keep one command allocator per swap-chain back buffer, indexed by `GetCurrentBackBufferIndex()`. Do not replace this with a cycling counter.
+- Elden Ring's swap chain may be `DXGI_FORMAT_R8G8B8A8_UNORM_SRGB`; RTV and ImGui formats must strip this to `DXGI_FORMAT_R8G8B8A8_UNORM`.
+- Pattern scans must stay cached. Never call `FindPattern` from hot paths.
+- Do not store raw game subsystem pointers across frames. Re-resolve through pointer chains when needed.
+- Radial selection confirms through direct slot writes. Do not reintroduce fallback cycling for radial confirm. Synthetic input is only for short tap passthrough.
 
-**Per-buffer command allocators.** `dx12_hook.cpp` keeps one `ID3D12CommandAllocator` per back-buffer index, indexed by `GetCurrentBackBufferIndex()`. Never use a cycling counter. Resetting allocator `[i]` is safe because swap-chain synchronisation guarantees the GPU has finished with buffer `i` by the time it becomes current again.
+## Common Tasks
 
-**sRGB format.** Elden Ring uses `DXGI_FORMAT_R8G8B8A8_UNORM_SRGB` for its swap chain. RTVs and the ImGui `RTVFormat` must use `DXGI_FORMAT_R8G8B8A8_UNORM` (strip the sRGB flag), or RTV creation will fail.
+Changing input behavior:
 
-**Command queue type filter.** `HookedECL` only captures `D3D12_COMMAND_LIST_TYPE_DIRECT` queues. The game submits copy and compute work on other queues; using one of those as the ImGui command queue will cause GPU errors.
+`src/input/radial_input.cpp`
 
-**Pattern scan addresses are cached.** `FindPattern` walks the entire `.exe` image. All resolved addresses are stored in file-static variables and computed once. Do not call `FindPattern` on a hot path.
+Changing radial menu visuals:
 
----
+`src/render/ui/radial_menu_draw.cpp`
 
-## Adding or Changing Features
+Changing D3D/ImGui setup:
 
-### Changing the rendering
-All D3D12 + ImGui setup is in `dx12_hook.cpp`. The drawing call is a single line in `HookedPresent`:
-```cpp
-radial_menu::Draw(GetMemorizedSpells());
-```
-Replace or extend this to add more UI elements.
+`src/render/d3d/dx12_hook.cpp`
 
-### Changing the radial menu appearance
-Edit `radial_menu.cpp`. The function `Draw(const vector<SpellSlot>&)` is self-contained ImGui draw-list code. All sizes scale with `ui_scale` (derived from viewport height relative to 1080p).
+Changing D3D vtable discovery:
 
-### Changing input behaviour
-Edit `input_hook.cpp` → `HookedXInputGetState`. The state machine constants at the top of the file (`kHoldThresholdMs`, `kQuickSelectHoldMs`, etc.) control timing.
+`src/render/d3d/dx12_vtable.cpp`
 
-### Changing memory offsets
-If a game update moves structures, update the constants in `spell_manager.cpp`:
-- `kGameDataManPattern` / `kGameDataManMask` — byte pattern to locate `GameDataMan`
-- `kEquipMagicDataOffset`, `kFirstMagicSlotOffset`, `kSelectedSlotOffset` — offsets within the manager chain
+Changing spell/quick-item memory offsets:
 
-For spell name / icon resolution, update the patterns and offsets in `spell_metadata.cpp`.
+`src/game/equipment/equip_access.cpp`
 
-### Updating the embedded font
-Rebuild `src/eldenring_font.h` from a `.ttf` file using ImGui's compression tool:
+Changing runtime param metadata:
+
+`src/game/metadata/spell_metadata.cpp` and `src/game/params/param_repository.cpp`
+
+Changing localized name lookup:
+
+`src/game/messages/message_repository.cpp`
+
+Changing icon archive/layout parsing:
+
+`src/render/assets/icon_assets.cpp`, `src/render/assets/dcx.cpp`, and `src/render/icons/icon_loader.cpp`
+
+Updating the embedded font:
+
 ```bash
 g++ -o /tmp/b2c vendor/imgui/misc/fonts/binary_to_compressed_c.cpp
-/tmp/b2c /path/to/font.ttf EldenRingFont > src/eldenring_font.h
-```
-Then adjust the pixel size in `dx12_hook.cpp` → `Init()`:
-```cpp
-io.Fonts->AddFontFromMemoryCompressedTTF(EldenRingFont_compressed_data,
-    (int)EldenRingFont_compressed_size, 20.0f);
+/tmp/b2c /path/to/font.ttf EldenRingFont > src/render/ui/eldenring_font.h
 ```
 
----
+Then adjust the font size in `src/render/d3d/dx12_hook.cpp` where `AddFontFromMemoryCompressedTTF` is called.
 
-## What NOT to Do
+## Source Organization
 
-- Do not add new dependencies beyond ImGui and MinHook without strong justification.
-- Do not call `FindPattern` on a hot path (every frame). Cache the result in a static.
-- Do not use `load_early = true`.
-- Do not store raw game pointers between frames — the game can unload/reload subsystems; re-resolve through the pointer chain each time.
-- Do not create external asset files (fonts, textures) that need to be deployed alongside the DLL. Embed them instead.
-- Do not commit `toolchains/`, `build/`, or `natives/*.dll` — they are gitignored for good reason.
+- `src/core`: entrypoint and shared utilities.
+- `src/game/equipment`: equip slots, inventory, spell/quick-item selection.
+- `src/game/messages`: runtime localized names.
+- `src/game/metadata`: spell/item metadata resolution.
+- `src/game/params`: runtime param repository access.
+- `src/game/state`: gameplay/HUD state and singleton resolution.
+- `src/input`: XInput hook and radial input state machine.
+- `src/render/assets`: file/asset parsing helpers.
+- `src/render/d3d`: D3D12 hook, vtable discovery, texture upload.
+- `src/render/icons`: icon atlas loading and UV lookup.
+- `src/render/ui`: ImGui radial menu state and drawing.
+- `src/render/vfs`: game VFS access and file reading.
+
+## What Not To Do
+
+- Do not add dependencies beyond ImGui and MinHook without strong justification.
+- Do not change `load_early` to `true`.
+- Do not create external runtime asset files that must be deployed beside the DLL. Embed assets instead.
+- Do not commit `toolchains/`, `build/`, or `natives/*.dll`.
+- Do not use destructive git commands unless explicitly requested.
+
+## Verification Checklist
+
+After code changes:
+
+1. Run `bash build.sh`.
+2. Run `git diff --check`.
+3. If testing locally with ERR, copy `natives/RadialSpellMenu.dll` to the ERR offline DLL folder.
+4. In game, verify spell radial, quick-item radial, short D-pad taps, icon loading, and first-open behavior.

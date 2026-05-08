@@ -1,6 +1,6 @@
 #pragma once
 
-#include "spell_manager.h"
+#include "game/equipment/spell_manager.h"
 
 namespace radial_spell_menu::input_hook {
 

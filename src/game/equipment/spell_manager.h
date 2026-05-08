@@ -1,6 +1,6 @@
 #pragma once
 
-#include "spell_metadata.h"
+#include "game/metadata/spell_metadata.h"
 
 #include <cstddef>
 #include <cstdint>

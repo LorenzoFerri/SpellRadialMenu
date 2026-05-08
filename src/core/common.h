@@ -92,6 +92,24 @@ inline std::uintptr_t ResolveRipRelative(std::uintptr_t addr, std::uintptr_t dis
     return addr + insn_size + disp;
 }
 
+inline bool IsReadableMemory(const void* ptr, std::size_t bytes)
+{
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!ptr || VirtualQuery(ptr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+    if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) || (mbi.Protect & PAGE_NOACCESS)) return false;
+
+    const DWORD protect = mbi.Protect & 0xFFu;
+    const bool readable = protect == PAGE_READONLY || protect == PAGE_READWRITE || protect == PAGE_WRITECOPY ||
+                          protect == PAGE_EXECUTE_READ || protect == PAGE_EXECUTE_READWRITE ||
+                          protect == PAGE_EXECUTE_WRITECOPY;
+    if (!readable) return false;
+
+    const auto begin = reinterpret_cast<std::uintptr_t>(ptr);
+    const auto region_begin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+    const auto region_end = region_begin + static_cast<std::uintptr_t>(mbi.RegionSize);
+    return begin >= region_begin && begin + bytes >= begin && begin + bytes <= region_end;
+}
+
 template <typename T>
 inline void SafeRelease(T*& p)
 {

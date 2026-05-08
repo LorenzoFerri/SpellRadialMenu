@@ -25,23 +25,62 @@ foreach(required_path
     endif()
 endforeach()
 
-add_library(RadialSpellMenu SHARED
-    src/dllmain.cpp
-    src/common.h
-    src/asset_reader.cpp
-    src/asset_reader.h
-    src/input_hook.cpp
-    src/input_hook.h
-    src/icon_loader.cpp
-    src/icon_loader.h
-    src/dx12_hook.cpp
-    src/dx12_hook.h
-    src/radial_menu.cpp
-    src/radial_menu.h
-    src/spell_metadata.cpp
-    src/spell_metadata.h
-    src/spell_manager.cpp
-    src/spell_manager.h
+set(RSM_CORE_SOURCES
+    src/core/dllmain.cpp
+    src/core/common.h
+)
+
+set(RSM_GAME_SOURCES
+    src/game/equipment/equip_access.cpp
+    src/game/equipment/equip_access.h
+    src/game/equipment/spell_manager.cpp
+    src/game/equipment/spell_manager.h
+    src/game/messages/message_repository.cpp
+    src/game/messages/message_repository.h
+    src/game/metadata/seamless_coop_metadata.cpp
+    src/game/metadata/seamless_coop_metadata.h
+    src/game/metadata/spell_metadata.cpp
+    src/game/metadata/spell_metadata.h
+    src/game/params/param_repository.cpp
+    src/game/params/param_repository.h
+    src/game/state/gameplay_state.cpp
+    src/game/state/gameplay_state.h
+    src/game/state/singleton_resolver.cpp
+    src/game/state/singleton_resolver.h
+)
+
+set(RSM_INPUT_SOURCES
+    src/input/input_hook.cpp
+    src/input/input_hook.h
+    src/input/radial_input.cpp
+    src/input/radial_input.h
+)
+
+set(RSM_RENDER_SOURCES
+    src/render/assets/dcx.cpp
+    src/render/assets/dcx.h
+    src/render/assets/icon_assets.cpp
+    src/render/assets/icon_assets.h
+    src/render/assets/loose_asset_reader.cpp
+    src/render/assets/loose_asset_reader.h
+    src/render/d3d/d3d_texture_upload.cpp
+    src/render/d3d/d3d_texture_upload.h
+    src/render/d3d/dx12_hook.cpp
+    src/render/d3d/dx12_hook.h
+    src/render/d3d/dx12_vtable.cpp
+    src/render/d3d/dx12_vtable.h
+    src/render/icons/icon_loader.cpp
+    src/render/icons/icon_loader.h
+    src/render/ui/eldenring_font.h
+    src/render/ui/radial_menu.cpp
+    src/render/ui/radial_menu.h
+    src/render/ui/radial_menu_draw.cpp
+    src/render/ui/radial_menu_draw.h
+    src/render/vfs/asset_reader.cpp
+    src/render/vfs/asset_reader.h
+)
+
+set(RSM_VENDOR_SOURCES
     ${IMGUI_ROOT}/imgui.cpp
     ${IMGUI_ROOT}/imgui_draw.cpp
     ${IMGUI_ROOT}/imgui_tables.cpp
@@ -52,6 +91,14 @@ add_library(RadialSpellMenu SHARED
     ${MINHOOK_ROOT}/src/hook.c
     ${MINHOOK_ROOT}/src/trampoline.c
     ${MINHOOK_ROOT}/src/hde/hde64.c
+)
+
+add_library(RadialSpellMenu SHARED
+    ${RSM_CORE_SOURCES}
+    ${RSM_GAME_SOURCES}
+    ${RSM_INPUT_SOURCES}
+    ${RSM_RENDER_SOURCES}
+    ${RSM_VENDOR_SOURCES}
 )
 
 target_include_directories(RadialSpellMenu PRIVATE

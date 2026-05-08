@@ -1,8 +1,8 @@
-#include "common.h"
-#include "asset_reader.h"
-#include "dx12_hook.h"
-#include "input_hook.h"
-#include "spell_manager.h"
+#include "core/common.h"
+#include "game/equipment/spell_manager.h"
+#include "input/input_hook.h"
+#include "render/d3d/dx12_hook.h"
+#include "render/vfs/asset_reader.h"
 
 #include <MinHook.h>
 #include <windows.h>

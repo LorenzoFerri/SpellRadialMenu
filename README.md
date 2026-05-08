@@ -1,39 +1,41 @@
 # RadialSpellMenu
 
-An Elden Ring mod that replaces the default d-pad spell cycling with a radial wheel for selecting memorized spells. Loaded via [ModEngine 3 (me3)](https://github.com/soulsmods/ModEngine2).
+RadialSpellMenu is an Elden Ring ModEngine 3 DLL that adds radial menus for spells and quick items.
 
 ![RadialSpellMenu screenshot](Screenshot.png)
 
 ## Features
 
-- **Spell radial wheel** — hold D-pad Up to open, use the right stick to select a spell, release to confirm
-- **Quick item radial wheel** — hold D-pad Down to open, use the right stick to select a belt item, release to confirm
-- **Spell names and categories** — reads live from the game's param/message repositories at runtime; no data files needed
-- **Category colour coding** — sorceries in blue, incantations in gold
-- **Selection highlight** — the currently selected spell arc is highlighted with a coloured border
-- **Embedded font** — the Elden Ring UI font is baked into the DLL; no external assets required
+- Hold `D-pad Up` to open a radial menu for memorized spells.
+- Hold `D-pad Down` to open a radial menu for quick items.
+- Select with the right stick and release the held D-pad direction to confirm.
+- Short D-pad taps pass through to the game, so vanilla cycling still works.
+- Spell and item names are resolved from the game's runtime message repository.
+- Spell/item icons are resolved from runtime params and game/mod icon assets.
+- The UI font is embedded in the DLL; no loose font or texture files are required.
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| Hold D-pad Up (~180 ms) | Open spell radial menu |
-| Hold D-pad Down (~180 ms) | Open quick item radial menu |
-| Right stick | Move selection |
-| Release held D-pad direction | Confirm selection |
-| Release without opening a radial | Pass through as a normal D-pad tap |
+| Hold `D-pad Up` | Open spell radial menu |
+| Hold `D-pad Down` | Open quick item radial menu |
+| Right stick | Select radial entry |
+| Release held D-pad direction | Confirm selected entry |
+| Tap `D-pad Up` / `D-pad Down` | Pass through as normal game input |
 
 ## Requirements
 
-- Elden Ring (Steam)
-- [ModEngine 3](https://github.com/soulsmods/ModEngine2) installed and configured
-- A controller using XInput
+- Elden Ring on Steam.
+- ModEngine 3.
+- An XInput-compatible controller.
+- Easy Anti-Cheat disabled, as required for DLL mods.
 
 ## Installation
 
-Download `RadialSpellMenu.zip` from the [latest GitHub release](https://github.com/LorenzoFerri/SpellRadialMenu/releases/latest). The same package is used on Linux/Proton and Windows.
+Download `RadialSpellMenu.zip` from the latest release:
 
-If there is no release yet, download the latest workflow artifact from the repository's **Actions** tab or build the DLL from source.
+`https://github.com/LorenzoFerri/SpellRadialMenu/releases/latest`
 
 The zip contains:
 
@@ -43,16 +45,13 @@ RadialSpellMenu/
   RadialSpellMenuProfile.me3
 ```
 
-### Linux / Steam Deck / Bazzite
-
-1. Extract `RadialSpellMenu.zip` anywhere you keep ModEngine profiles.
-2. Launch the included profile through ModEngine 3:
+Launch the included profile with ModEngine 3:
 
 ```bash
 me3 launch --profile "/path/to/RadialSpellMenu/RadialSpellMenuProfile.me3"
 ```
 
-The included profile loads the DLL from the same folder:
+To add the DLL to an existing ModEngine 3 profile, place `RadialSpellMenu.dll` where the profile can find it and add:
 
 ```toml
 [[natives]]
@@ -61,49 +60,13 @@ optional = false
 load_early = false
 ```
 
-For ERR or another modpack, you can either use the included profile as a reference or copy both files into the same folder used by that setup. If you add it to an existing profile, use this native entry:
+`load_early = false` is required. The mod discovers D3D12 hook targets by creating a dummy swap chain after the game renderer is already initialized. Loading early can deadlock with the game's own renderer startup.
 
-```toml
-[[natives]]
-path = 'RadialSpellMenu.dll'
-optional = false
-load_early = false
-```
-
-The important part is still that the DLL and profile path match, and that `load_early = false` is kept.
-
-### Windows
-
-1. Extract `RadialSpellMenu.zip` anywhere you keep ModEngine profiles.
-2. Launch Elden Ring through your usual ModEngine 3 launcher using `RadialSpellMenuProfile.me3`.
-
-The included profile loads the DLL from the same folder:
-
-```toml
-[[natives]]
-path = 'RadialSpellMenu.dll'
-optional = false
-load_early = false
-```
-
-For ERR or another modpack, you can copy both files into the same folder used by that setup, or add the native entry to an existing profile. If the DLL is beside the profile, use:
-
-```toml
-[[natives]]
-path = 'RadialSpellMenu.dll'
-optional = false
-load_early = false
-```
-
-Do not load this DLL through old-style `external_dlls` entries if your setup also supports `[[natives]]`. This mod hooks D3D12 and must be loaded after the game renderer exists.
-
-> **`load_early = false` is required.** The DLL hooks into an already-running D3D12 swap chain; it must not load before the game's renderer is initialised.
-
-### Logs
+## Logs
 
 The mod writes `RadialSpellMenu.log` next to `RadialSpellMenu.dll`.
 
-Useful startup lines look like this:
+Useful startup lines include:
 
 ```text
 Spell manager initialized ...
@@ -114,64 +77,88 @@ Command queue captured
 ImGui ready
 ```
 
-`Icon loader ready ...` appears the first time the radial menu opens, not necessarily at game launch.
-
-If the game freezes or the menu does not appear, check this log first and include the last few lines when reporting the issue.
+`Icon loader ready ...` appears after gameplay is ready and icon assets are warmed, not necessarily at process startup.
 
 ## Building
 
-Building is only needed if you want to compile the DLL yourself. End users can use the release zip.
-
-GitHub Actions builds `RadialSpellMenu.zip` automatically for pushes, pull requests, manual workflow runs, and published releases. Pushing a version tag like `v1.0.0` creates a GitHub release with the zip attached; publishing a release manually also attaches the zip.
-
-On Linux, install `cmake`, `ninja`, `git`, and `curl`, then run:
+End users should use the release zip. To build from source on Linux:
 
 ```bash
-git clone <this-repo> RadialSpellMenu
+git clone <repo-url> RadialSpellMenu
 cd RadialSpellMenu
 bash build.sh
 ```
 
-`build.sh` handles everything automatically:
-1. Clones `imgui` and `minhook` into `vendor/`
-2. Detects or installs a mingw-w64 / llvm-mingw cross-compiler
-3. Configures and builds with CMake + Ninja
-4. Copies the resulting `RadialSpellMenu.dll` to `natives/`
+`build.sh` is the supported build path. It prepares vendored dependencies if needed, selects a Windows cross-compiler, configures CMake, and builds the DLL.
 
-The output DLL is at `natives/RadialSpellMenu.dll`.
+Build output:
 
-## Project Structure
-
-```
-src/
-  dllmain.cpp          — DLL entry point, wires up all subsystems
-  common.h             — Log(), pattern-scanning helpers (GetModuleBase, FindPattern, …)
-  dx12_hook.cpp/h      — D3D12 + ImGui rendering (vtable hooks for Present & ECL)
-  input_hook.cpp/h     — XInput hook, open/close/select radial menu on D-pad Up
-  radial_menu.cpp/h    — ImGui drawing code for the radial wheel
-  spell_manager.cpp/h  — Reads memorized spells and current slot from game memory
-  spell_metadata.cpp/h — Resolves spell names and icons from MagicParam / MsgRepository
-  eldenring_font.h     — Elden Ring UI font embedded as a compressed C array
-
-vendor/
-  imgui/               — Dear ImGui (cloned by build.sh)
-  minhook/             — MinHook (cloned by build.sh)
-
-cmake/
-  mingw-w64-toolchain.cmake    — Toolchain file for system mingw-w64
-  llvm-mingw-toolchain.cmake   — Toolchain file for bundled llvm-mingw
-
-natives/               — Build output (gitignored)
-toolchains/            — Downloaded llvm-mingw binary (gitignored)
+```text
+natives/RadialSpellMenu.dll
 ```
 
-## How It Works
+The project cross-compiles a Windows DLL. Do not attempt a native Linux build.
 
-### Rendering (`dx12_hook.cpp`)
-Because `load_early = false`, the game's D3D12 swap chain already exists when the DLL loads. `Install()` creates a tiny hidden window and a throw-away swap chain purely to read the `IDXGISwapChain::Present` vtable pointer, then destroys everything. MinHook patches that address so every `Present` call goes through `HookedPresent`. A second hook on `ID3D12CommandQueue::ExecuteCommandLists` captures the game's real command queue, which ImGui's DX12 backend needs. ImGui is initialised lazily on the first `Present` call after the queue is captured.
+## Source Layout
 
-### Input (`input_hook.cpp`)
-`XInputGetState` is hooked via MinHook. A hold of D-pad Up longer than 180 ms opens the spell radial, while D-pad Down opens the quick item radial. The held D-pad direction is suppressed once a radial is opening/open, and short taps are replayed so vanilla cycling still works. The right stick axes are consumed while the menu is open and fed to `UpdateSelectionFromStick`. On release, spell selection writes directly to `EquipMagicData.selected_slot`; quick item selection writes to `EquipItemData.selected_quick_slot`.
+```text
+src/core/
+  dllmain.cpp                 DLL entry point and subsystem startup
+  common.h                    logging, pattern scan, memory helpers
 
-### Memory (`spell_manager.cpp`, `spell_metadata.cpp`)
-Both files use byte-pattern scanning (`FindPattern`) against the game's `.exe` image to locate `GameDataMan` and `SoloParamRepository` without relying on hardcoded absolute addresses. Spell names are read from the game's `MsgRepository` by hooking its internal lookup function.
+src/game/equipment/
+  equip_access.*              GameDataMan/equip/inventory memory access
+  spell_manager.*             spell and quick-item slot lists and switching
+
+src/game/messages/
+  message_repository.*        runtime localized name lookup
+
+src/game/metadata/
+  spell_metadata.*            spell/item icon IDs and categories
+  seamless_coop_metadata.*    Seamless Coop item icon metadata extraction
+
+src/game/params/
+  param_repository.*          runtime param repository row access
+
+src/game/state/
+  gameplay_state.*            normal gameplay HUD-state check
+  singleton_resolver.*        shared singleton static-address resolver
+
+src/input/
+  input_hook.*                XInput hook installation
+  radial_input.*              radial hold/tap/selection state machine
+
+src/render/assets/
+  dcx.*                       DCX/KRAK/DFLT decompression
+  icon_assets.*               icon layout and TPF parsing
+  loose_asset_reader.*        loose mod asset lookup near the DLL
+
+src/render/d3d/
+  dx12_hook.*                 Present/ECL hooks and ImGui rendering
+  dx12_vtable.*               dummy swap-chain vtable discovery
+  d3d_texture_upload.*        BC7 DDS upload and SRV creation
+
+src/render/icons/
+  icon_loader.*               icon atlas loading and UV lookup
+
+src/render/ui/
+  radial_menu.*               radial menu state and public UI API
+  radial_menu_draw.*          radial menu layout and draw primitives
+  eldenring_font.h            embedded compressed font
+```
+
+## Runtime Design
+
+The DLL is loaded by ModEngine 3 after game initialization. Startup installs MinHook, initializes game-data access, installs the asset reader hook, installs the XInput hook, and installs D3D12 hooks.
+
+Input is handled by hooking `XInputGetState`. D-pad holds open a radial menu, right-stick movement selects a radial entry, and releasing the held D-pad direction confirms the selected spell or item. Spell and quick-item selection are direct game-memory writes; synthetic input is only used to replay short taps.
+
+Rendering is handled by hooking `IDXGISwapChain::Present` and `ID3D12CommandQueue::ExecuteCommandLists`. The command queue hook captures the real direct graphics queue. ImGui initializes lazily on the first suitable `Present` call. The overlay draws only while a radial menu is open.
+
+Metadata is resolved from runtime game systems instead of static data files. Names come from `MsgRepository`; spell and item icons come from runtime params and icon asset layouts. Modded icon assets are supported through game VFS reads and loose mod asset fallback paths.
+
+## Notes
+
+- The mod is intended for offline play with EAC disabled.
+- `toolchains/`, `build/`, and `natives/` are build artifacts and are gitignored.
+- The included profile uses a separate savefile name. If you merge this DLL into another profile, review the profile-level savefile settings for your setup.
