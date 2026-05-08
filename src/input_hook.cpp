@@ -626,6 +626,11 @@ bool IsMenuOpen()
     return radial_spell_menu::radial_menu::IsOpen();
 }
 
+bool IsGameplayReady()
+{
+    return IsNormalGameplayHudState();
+}
+
 const std::vector<SpellSlot>& GetOpenSpellSlots()
 {
     return g_open_spell_slots;

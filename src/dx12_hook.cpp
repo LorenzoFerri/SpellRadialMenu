@@ -75,9 +75,9 @@ static void SrvAlloc(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu,
 static void SrvFree(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE,
                     D3D12_GPU_DESCRIPTOR_HANDLE) {}
 
-static void TryInitializeIcons()
+static bool TryInitializeIcons()
 {
-    if (!asset_reader::Install()) return;
+    if (!asset_reader::Install()) return false;
 
     if (!g_icon_srv_allocated) {
         for (std::size_t i = 0; i < icon_loader::kMaxAtlases; ++i) {
@@ -88,7 +88,9 @@ static void TryInitializeIcons()
 
     if (icon_loader::TryInitialize(g_device, g_queue, g_icon_srv_cpu, g_icon_srv_gpu, icon_loader::kMaxAtlases)) {
         radial_menu::SetIconTextureResolver(&icon_loader::Resolve);
+        return true;
     }
+    return false;
 }
 
 // ── ImGui + D3D12 init (called on first Present) ──────────────────────────
@@ -184,6 +186,9 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* sc, UINT sync, U
     }
 
     if (!radial_menu::IsOpen()) {
+        if (input_hook::IsGameplayReady()) {
+            TryInitializeIcons();
+        }
         return g_orig_present(sc, sync, flags);
     }
 
