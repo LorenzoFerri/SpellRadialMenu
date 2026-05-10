@@ -55,12 +55,21 @@ static bool g_have_last_mouse_pos = false;
 
 // ── hook plumbing ─────────────────────────────────────────────────────────
 using PFN_Present = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT);
+using PFN_ResizeBuffers = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+using PFN_ResizeBuffers1 = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*);
+using PFN_SetFullscreenState = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, BOOL, IDXGIOutput*);
 using PFN_ECL     = void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
 
 static PFN_Present g_orig_present = nullptr;
+static PFN_ResizeBuffers g_orig_resize_buffers = nullptr;
+static PFN_ResizeBuffers1 g_orig_resize_buffers1 = nullptr;
+static PFN_SetFullscreenState g_orig_set_fullscreen_state = nullptr;
 static PFN_ECL     g_orig_ecl     = nullptr;
 
 static void* g_hook_present = nullptr;
+static void* g_hook_resize_buffers = nullptr;
+static void* g_hook_resize_buffers1 = nullptr;
+static void* g_hook_set_fullscreen_state = nullptr;
 static void* g_hook_ecl     = nullptr;
 
 // ── WndProc ───────────────────────────────────────────────────────────────
@@ -135,6 +144,76 @@ static bool TryInitializeIcons()
         return true;
     }
     return false;
+}
+
+static void WaitForQueueIdle()
+{
+    if (!g_device || !g_queue) return;
+
+    ID3D12Fence* fence = nullptr;
+    if (FAILED(g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return;
+
+    HANDLE event_handle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!event_handle) {
+        fence->Release();
+        return;
+    }
+
+    constexpr UINT64 fence_value = 1;
+    if (SUCCEEDED(g_queue->Signal(fence, fence_value)) && fence->GetCompletedValue() < fence_value) {
+        if (SUCCEEDED(fence->SetEventOnCompletion(fence_value, event_handle))) {
+            WaitForSingleObject(event_handle, 2000);
+        }
+    }
+
+    CloseHandle(event_handle);
+    fence->Release();
+}
+
+static void ReleaseOverlayResources(const char* reason)
+{
+    if (!g_ready && !g_device && !g_frames && !g_rtv_heap && !g_srv_heap && !g_cmdlist) return;
+
+    WaitForQueueIdle();
+    icon_loader::Shutdown();
+    g_icons_ready = false;
+    g_icon_srv_allocated = false;
+    g_srv_used = 0;
+    for (std::size_t i = 0; i < icon_loader::kMaxAtlases; ++i) {
+        g_icon_srv_cpu[i] = {};
+        g_icon_srv_gpu[i] = {};
+    }
+
+    if (g_ready) {
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+    }
+
+    if (g_hwnd && g_old_wndproc) {
+        SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, (LONG_PTR)g_old_wndproc);
+    }
+
+    if (g_cmdlist) { g_cmdlist->Release(); g_cmdlist = nullptr; }
+    if (g_frames) {
+        for (UINT i = 0; i < g_buf_count; i++) {
+            if (g_frames[i].allocator)  g_frames[i].allocator->Release();
+            if (g_frames[i].backbuffer) g_frames[i].backbuffer->Release();
+        }
+        delete[] g_frames;
+        g_frames = nullptr;
+    }
+    if (g_rtv_heap) { g_rtv_heap->Release(); g_rtv_heap = nullptr; }
+    if (g_srv_heap) { g_srv_heap->Release(); g_srv_heap = nullptr; }
+    if (g_device) { g_device->Release(); g_device = nullptr; }
+
+    g_ready = false;
+    g_buf_count = 0;
+    g_rtv_stride = 0;
+    g_hwnd = nullptr;
+    g_old_wndproc = nullptr;
+    g_have_last_mouse_pos = false;
+    Log("Overlay resources released for %s.", reason);
 }
 
 // ── ImGui + D3D12 init (called on first Present) ──────────────────────────
@@ -222,10 +301,14 @@ static void Init(IDXGISwapChain3* swap_chain)
 static void RenderRadialOverlay(IDXGISwapChain3* swap_chain)
 {
     UINT buffer_index = swap_chain->GetCurrentBackBufferIndex();
+    if (buffer_index >= g_buf_count || !g_frames || !g_frames[buffer_index].allocator ||
+        !g_frames[buffer_index].backbuffer || !g_cmdlist || !g_srv_heap || !g_queue) {
+        return;
+    }
     Frame& frame = g_frames[buffer_index];
 
-    frame.allocator->Reset();
-    g_cmdlist->Reset(frame.allocator, nullptr);
+    if (FAILED(frame.allocator->Reset())) return;
+    if (FAILED(g_cmdlist->Reset(frame.allocator, nullptr))) return;
 
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -301,6 +384,38 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
     return g_orig_present(swap_chain, sync, flags);
 }
 
+static HRESULT STDMETHODCALLTYPE HookedResizeBuffers(IDXGISwapChain* swap_chain, UINT buffer_count, UINT width,
+                                                     UINT height, DXGI_FORMAT new_format, UINT swap_chain_flags)
+{
+    Log("Swap chain ResizeBuffers detected (%ux%u buffers=%u).", width, height, buffer_count);
+    ReleaseOverlayResources("swap-chain reset");
+    return g_orig_resize_buffers(swap_chain, buffer_count, width, height, new_format, swap_chain_flags);
+}
+
+static HRESULT STDMETHODCALLTYPE HookedResizeBuffers1(IDXGISwapChain3* swap_chain, UINT buffer_count, UINT width,
+                                                      UINT height, DXGI_FORMAT new_format, UINT swap_chain_flags,
+                                                      const UINT* creation_node_mask, IUnknown* const* present_queue)
+{
+    Log("Swap chain ResizeBuffers1 detected (%ux%u buffers=%u).", width, height, buffer_count);
+    ReleaseOverlayResources("swap-chain reset");
+    return g_orig_resize_buffers1(swap_chain, buffer_count, width, height, new_format, swap_chain_flags,
+                                  creation_node_mask, present_queue);
+}
+
+static HRESULT STDMETHODCALLTYPE HookedSetFullscreenState(IDXGISwapChain* swap_chain, BOOL fullscreen,
+                                                          IDXGIOutput* target)
+{
+    BOOL current_fullscreen = FALSE;
+    const HRESULT state_result = swap_chain->GetFullscreenState(&current_fullscreen, nullptr);
+    const bool state_changed = FAILED(state_result) || current_fullscreen != fullscreen;
+
+    if (state_changed) {
+        Log("SetFullscreenState detected (fullscreen=%d).", fullscreen ? 1 : 0);
+        ReleaseOverlayResources("fullscreen transition");
+    }
+    return g_orig_set_fullscreen_state(swap_chain, fullscreen, target);
+}
+
 // ── ExecuteCommandLists hook — captures the real command queue ────────────
 static void STDMETHODCALLTYPE HookedECL(ID3D12CommandQueue* queue, UINT command_list_count,
                                           ID3D12CommandList* const* lists)
@@ -317,11 +432,27 @@ bool Install()
     dx12_vtable::HookTargets targets{};
     if (!dx12_vtable::DiscoverHookTargets(targets)) return false;
     g_hook_present = targets.present;
+    g_hook_resize_buffers = targets.resize_buffers;
+    g_hook_resize_buffers1 = targets.resize_buffers1;
+    g_hook_set_fullscreen_state = targets.set_fullscreen_state;
     g_hook_ecl = targets.execute_command_lists;
 
     if (MH_CreateHook(g_hook_present, (void*)HookedPresent, (void**)&g_orig_present) != MH_OK
      || MH_EnableHook(g_hook_present) != MH_OK) {
         Log("Present hook failed"); return false;
+    }
+    if (MH_CreateHook(g_hook_resize_buffers, (void*)HookedResizeBuffers, (void**)&g_orig_resize_buffers) != MH_OK
+     || MH_EnableHook(g_hook_resize_buffers) != MH_OK) {
+        Log("ResizeBuffers hook failed"); return false;
+    }
+    if (g_hook_resize_buffers1 &&
+        (MH_CreateHook(g_hook_resize_buffers1, (void*)HookedResizeBuffers1, (void**)&g_orig_resize_buffers1) != MH_OK
+      || MH_EnableHook(g_hook_resize_buffers1) != MH_OK)) {
+        Log("ResizeBuffers1 hook failed"); return false;
+    }
+    if (MH_CreateHook(g_hook_set_fullscreen_state, (void*)HookedSetFullscreenState, (void**)&g_orig_set_fullscreen_state) != MH_OK
+     || MH_EnableHook(g_hook_set_fullscreen_state) != MH_OK) {
+        Log("SetFullscreenState hook failed"); return false;
     }
     if (MH_CreateHook(g_hook_ecl, (void*)HookedECL, (void**)&g_orig_ecl) != MH_OK
      || MH_EnableHook(g_hook_ecl) != MH_OK) {
@@ -333,30 +464,13 @@ bool Install()
 
 void Shutdown()
 {
-    icon_loader::Shutdown();
-    g_icons_ready = false;
     if (g_hook_present) { MH_DisableHook(g_hook_present); MH_RemoveHook(g_hook_present); }
+    if (g_hook_resize_buffers) { MH_DisableHook(g_hook_resize_buffers); MH_RemoveHook(g_hook_resize_buffers); }
+    if (g_hook_resize_buffers1) { MH_DisableHook(g_hook_resize_buffers1); MH_RemoveHook(g_hook_resize_buffers1); }
+    if (g_hook_set_fullscreen_state) { MH_DisableHook(g_hook_set_fullscreen_state); MH_RemoveHook(g_hook_set_fullscreen_state); }
     if (g_hook_ecl)     { MH_DisableHook(g_hook_ecl);     MH_RemoveHook(g_hook_ecl); }
 
-    if (g_ready) {
-        ImGui_ImplDX12_Shutdown();
-        ImGui_ImplWin32_Shutdown();
-        ImGui::DestroyContext();
-        if (g_hwnd && g_old_wndproc)
-            SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, (LONG_PTR)g_old_wndproc);
-    }
-
-    if (g_cmdlist)  g_cmdlist->Release();
-    if (g_rtv_heap) g_rtv_heap->Release();
-    if (g_srv_heap) g_srv_heap->Release();
-    if (g_device)   g_device->Release();
-    if (g_frames) {
-        for (UINT i = 0; i < g_buf_count; i++) {
-            if (g_frames[i].allocator)  g_frames[i].allocator->Release();
-            if (g_frames[i].backbuffer) g_frames[i].backbuffer->Release();
-        }
-        delete[] g_frames;
-    }
+    ReleaseOverlayResources("shutdown");
 }
 
 } // namespace radial_menu_mod::dx12_hook

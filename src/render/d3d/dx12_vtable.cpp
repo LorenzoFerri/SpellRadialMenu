@@ -60,18 +60,29 @@ bool DiscoverHookTargets(HookTargets& targets)
         return false;
     }
 
+    IDXGISwapChain3* swap_chain3 = nullptr;
+    swap_chain->QueryInterface(IID_PPV_ARGS(&swap_chain3));
+
     void** swap_chain_vtable = *reinterpret_cast<void***>(swap_chain);
     void** queue_vtable = *reinterpret_cast<void***>(command_queue);
     targets.present = swap_chain_vtable[8];
+    targets.set_fullscreen_state = swap_chain_vtable[10];
+    targets.resize_buffers = swap_chain_vtable[13];
+    if (swap_chain3) {
+        void** swap_chain3_vtable = *reinterpret_cast<void***>(swap_chain3);
+        targets.resize_buffers1 = swap_chain3_vtable[39];
+    }
     targets.execute_command_lists = queue_vtable[10];
 
+    if (swap_chain3) swap_chain3->Release();
     swap_chain->Release();
     factory->Release();
     command_queue->Release();
     device->Release();
     DestroyWindow(dummy_window);
     UnregisterClassW(L"RSM_Dummy", GetModuleHandleW(nullptr));
-    return targets.present != nullptr && targets.execute_command_lists != nullptr;
+    return targets.present != nullptr && targets.resize_buffers != nullptr &&
+           targets.set_fullscreen_state != nullptr && targets.execute_command_lists != nullptr;
 }
 
 }  // namespace radial_menu_mod::dx12_vtable
