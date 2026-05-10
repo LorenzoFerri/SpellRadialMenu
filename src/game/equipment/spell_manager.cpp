@@ -3,6 +3,10 @@
 #include "core/common.h"
 #include "game/equipment/equip_access.h"
 
+#include <cstdio>
+#include <string>
+#include <utility>
+
 namespace radial_menu_mod {
 
 namespace {
@@ -10,18 +14,31 @@ namespace {
 using namespace equip_access;
 
 bool g_logged_no_equip_data = false;
+std::vector<std::uint32_t> g_last_spell_log_signature;
+std::vector<std::uint32_t> g_last_item_log_signature;
 
-void LogResolvedSlots(const char* label, const std::vector<SpellSlot>& slots)
+void LogSlotSummaryIfChanged(const char* label, const std::vector<SpellSlot>& slots, std::vector<std::uint32_t>& last_signature)
 {
-    Log("%s radial entries loaded: count=%zu.", label, slots.size());
+    std::vector<std::uint32_t> signature;
+    signature.reserve(slots.size() * 3);
     for (const SpellSlot& slot : slots) {
-        Log("%s radial entry: slot=%zu id=%u resolved_icon=%u name=\"%s\".",
-            label,
-            slot.slot_index,
-            slot.spell_id,
-            slot.icon_id,
-            slot.name.c_str());
+        signature.push_back(static_cast<std::uint32_t>(slot.slot_index));
+        signature.push_back(slot.spell_id);
+        signature.push_back(slot.icon_id);
     }
+
+    if (signature == last_signature) return;
+    last_signature = std::move(signature);
+
+    std::string summary;
+    summary.reserve(slots.size() * 24);
+    for (const SpellSlot& slot : slots) {
+        char entry[48] = {};
+        std::snprintf(entry, sizeof(entry), "%s%u:%u", summary.empty() ? "" : ",", slot.spell_id, slot.icon_id);
+        summary += entry;
+    }
+
+    Log("%s radial entries changed (count=%zu ids_icons=[%s]).", label, slots.size(), summary.c_str());
 }
 
 }  // namespace
@@ -34,7 +51,6 @@ bool InitializeSpellManager()
         Log("Failed to resolve GameDataMan; memorized spells will be unavailable.");
         return false;
     }
-    Log("Spell manager initialized (GameDataMan at 0x%p).", reinterpret_cast<void*>(game_data_man));
     return true;
 }
 
@@ -86,7 +102,7 @@ std::vector<SpellSlot> GetMemorizedSpells()
             .is_current = (static_cast<int>(i) == current_entry),
         });
     }
-    LogResolvedSlots("Spell", spells);
+    LogSlotSummaryIfChanged("Spell", spells, g_last_spell_log_signature);
     return spells;
 }
 
@@ -157,7 +173,7 @@ std::vector<SpellSlot> GetQuickItems()
             .is_current = (current_slot == static_cast<std::int32_t>(i)),
         });
     }
-    LogResolvedSlots("Quick item", items);
+    LogSlotSummaryIfChanged("Quick item", items, g_last_item_log_signature);
     return items;
 }
 

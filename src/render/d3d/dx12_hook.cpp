@@ -1,11 +1,12 @@
 #include "render/d3d/dx12_hook.h"
-#include "render/vfs/asset_reader.h"
 #include "core/common.h"
-#include "render/icons/icon_loader.h"
+#include "game/state/gameplay_state.h"
 #include "input/input_hook.h"
 #include "input/radial_input.h"
-#include "render/ui/radial_menu.h"
 #include "render/d3d/dx12_vtable.h"
+#include "render/icons/icon_loader.h"
+#include "render/vfs/asset_reader.h"
+#include "render/ui/radial_menu.h"
 #include "render/ui/eldenring_font.h"
 
 #include <MinHook.h>
@@ -44,6 +45,7 @@ static UINT                        g_rtv_stride = 0;
 static D3D12_CPU_DESCRIPTOR_HANDLE g_icon_srv_cpu[icon_loader::kMaxAtlases] = {};
 static D3D12_GPU_DESCRIPTOR_HANDLE g_icon_srv_gpu[icon_loader::kMaxAtlases] = {};
 static bool                        g_icon_srv_allocated = false;
+static bool                        g_icons_ready = false;
 static bool                        g_logged_icon_vfs_unavailable = false;
 
 static HWND    g_hwnd        = nullptr;
@@ -115,8 +117,10 @@ static void SrvAlloc(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu,
 static void SrvFree(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE,
                     D3D12_GPU_DESCRIPTOR_HANDLE) {}
 
-static void TryInitializeIcons()
+static bool TryInitializeIcons()
 {
+    if (g_icons_ready) return true;
+
     if (!g_icon_srv_allocated) {
         for (std::size_t i = 0; i < icon_loader::kMaxAtlases; ++i) {
             SrvAlloc(nullptr, &g_icon_srv_cpu[i], &g_icon_srv_gpu[i]);
@@ -126,7 +130,11 @@ static void TryInitializeIcons()
 
     if (icon_loader::TryInitialize(g_device, g_queue, g_icon_srv_cpu, g_icon_srv_gpu, icon_loader::kMaxAtlases)) {
         radial_menu::SetIconTextureResolver(&icon_loader::Resolve);
+        g_icons_ready = true;
+        Log("Icon loader initialized.");
+        return true;
     }
+    return false;
 }
 
 // ── ImGui + D3D12 init (called on first Present) ──────────────────────────
@@ -139,8 +147,6 @@ static void Init(IDXGISwapChain3* swap_chain)
     swap_chain->GetDesc(&swap_chain_desc);
     g_buf_count = swap_chain_desc.BufferCount;
     g_hwnd = swap_chain_desc.OutputWindow;
-
-    Log("Init: buffers=%u hwnd=%p", g_buf_count, (void*)g_hwnd);
 
     // RTV heap
     {
@@ -210,7 +216,7 @@ static void Init(IDXGISwapChain3* swap_chain)
 
     g_old_wndproc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, (LONG_PTR)HookedWndProc);
     g_ready = true;
-    Log("ImGui ready");
+    Log("D3D12 overlay initialized (buffers=%u hwnd=%p).", g_buf_count, (void*)g_hwnd);
 }
 
 static void RenderRadialOverlay(IDXGISwapChain3* swap_chain)
@@ -257,7 +263,7 @@ static void CaptureDirectQueue(ID3D12CommandQueue* queue)
     D3D12_COMMAND_QUEUE_DESC desc = queue->GetDesc();
     if (desc.Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
         g_queue = queue;
-        Log("Command queue captured");
+        Log("Direct command queue captured.");
     }
 }
 
@@ -281,10 +287,11 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
         g_logged_icon_vfs_unavailable = true;
     }
 
+    const bool gameplay_ready = gameplay_state::RefreshNormalGameplayHudState();
     PollKeyboardMouseRadial();
 
     if (!radial_menu::IsOpen()) {
-        if (input_hook::IsGameplayReady()) {
+        if (!g_icons_ready && gameplay_ready) {
             TryInitializeIcons();
         }
         return g_orig_present(swap_chain, sync, flags);
@@ -320,14 +327,14 @@ bool Install()
      || MH_EnableHook(g_hook_ecl) != MH_OK) {
         Log("ECL hook failed"); return false;
     }
-
-    Log("Hooks installed");
+    Log("D3D12 hooks installed.");
     return true;
 }
 
 void Shutdown()
 {
     icon_loader::Shutdown();
+    g_icons_ready = false;
     if (g_hook_present) { MH_DisableHook(g_hook_present); MH_RemoveHook(g_hook_present); }
     if (g_hook_ecl)     { MH_DisableHook(g_hook_ecl);     MH_RemoveHook(g_hook_ecl); }
 

@@ -58,8 +58,8 @@ RadialKind g_open_kind = RadialKind::none;
 
 bool CanStartRadialInput(RadialKind kind)
 {
-    if (!gameplay_state::IsNormalGameplayHudState()) return false;
-    return kind == RadialKind::spells ? !GetMemorizedSpells().empty() : true;
+    if (!gameplay_state::GetCachedNormalGameplayHudState()) return false;
+    return kind != RadialKind::none;
 }
 
 RadialKind KindForButton(WORD button)
@@ -168,6 +168,7 @@ int CurrentSelectionFor(RadialKind kind)
 
 bool OpenRadial(ControllerContext& controller, DWORD user_index)
 {
+    (void)user_index;
     LoadOpenRadialSlots(controller.active_kind);
     if (g_open_spell_slots.empty()) {
         g_open_kind = RadialKind::none;
@@ -182,9 +183,6 @@ bool OpenRadial(ControllerContext& controller, DWORD user_index)
     if (initial_selection < 0) initial_selection = 0;
 
     radial_menu::Open(initial_selection);
-    Log("Opening radial %s menu for controller %lu.",
-        controller.active_kind == RadialKind::items ? "quick item" : "spell",
-        static_cast<unsigned long>(user_index));
     return true;
 }
 
@@ -204,7 +202,6 @@ bool OpenRadial(KeyboardMouseContext& input)
     if (initial_selection < 0) initial_selection = 0;
 
     radial_menu::Open(initial_selection);
-    Log("Opening radial %s menu for keyboard/mouse.", input.active_kind == RadialKind::items ? "quick item" : "spell");
     return true;
 }
 
@@ -241,10 +238,10 @@ void ConfirmRadialSelection(RadialKind active_kind)
 
 void CloseRadial(DWORD user_index)
 {
+    (void)user_index;
     radial_menu::Close();
     g_open_spell_slots.clear();
     g_open_kind = RadialKind::none;
-    Log("Closed radial menu for controller %lu.", static_cast<unsigned long>(user_index));
 }
 
 void CloseRadialKeyboardMouse()
@@ -252,11 +249,11 @@ void CloseRadialKeyboardMouse()
     radial_menu::Close();
     g_open_spell_slots.clear();
     g_open_kind = RadialKind::none;
-    Log("Closed radial menu for keyboard/mouse.");
 }
 
 void HandleTriggerRelease(ControllerContext& controller, DWORD user_index, XINPUT_STATE* state, ULONGLONG now)
 {
+    const WORD released_button = controller.trigger_button;
     if (controller.radial_opened) {
         ConfirmRadialSelection(controller.active_kind);
         CloseRadial(user_index);
@@ -265,7 +262,6 @@ void HandleTriggerRelease(ControllerContext& controller, DWORD user_index, XINPU
         QueueTap(controller, now);
     }
 
-    const WORD released_button = controller.trigger_button;
     ResetTriggerState(controller);
     state->Gamepad.wButtons &= ~released_button;
 }
@@ -298,17 +294,21 @@ void HandleControllerState(DWORD user_index, XINPUT_STATE* state)
     const bool physical_trigger_pressed = controller.trigger_button != 0
         ? ((state->Gamepad.wButtons & controller.trigger_button) != 0)
         : (pressed_trigger != 0);
+    bool checked_gameplay_state = false;
 
     if (pressed_trigger != 0 && !controller.trigger_down) {
         const RadialKind kind = KindForButton(pressed_trigger);
         if (!CanStartRadialInput(kind)) return;
 
         BeginTriggerHold(controller, pressed_trigger, kind, now);
+        checked_gameplay_state = true;
     }
 
-    if (controller.trigger_down && !controller.radial_opened && !gameplay_state::IsNormalGameplayHudState()) {
-        ResetTriggerState(controller);
-        return;
+    if (controller.trigger_down && !controller.radial_opened && !checked_gameplay_state) {
+        if (!gameplay_state::GetCachedNormalGameplayHudState()) {
+            ResetTriggerState(controller);
+            return;
+        }
     }
 
     if (controller.trigger_down && physical_trigger_pressed && !controller.radial_opened &&
@@ -339,7 +339,7 @@ void HandleKeyboardMouseState(bool spell_held, bool item_held)
         BeginTriggerHold(g_keyboard_mouse, pressed_kind, now);
     }
 
-    if (g_keyboard_mouse.trigger_down && !g_keyboard_mouse.radial_opened && !gameplay_state::IsNormalGameplayHudState()) {
+    if (g_keyboard_mouse.trigger_down && !g_keyboard_mouse.radial_opened && !gameplay_state::GetCachedNormalGameplayHudState()) {
         ResetTriggerState(g_keyboard_mouse);
         return;
     }

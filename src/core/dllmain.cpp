@@ -11,16 +11,21 @@ namespace {
 
 DWORD WINAPI InitializeRadialMenu(LPVOID)
 {
+    radial_menu_mod::Log("Initialization started.");
     if (MH_Initialize() != MH_OK) {
         radial_menu_mod::Log("MinHook initialization failed.");
         return 0;
     }
 
-    radial_menu_mod::asset_reader::Install();
-    radial_menu_mod::InitializeSpellManager();
-    radial_menu_mod::input_hook::Install();
-    radial_menu_mod::dx12_hook::Install();
-    radial_menu_mod::Log("Initialization completed.");
+    const bool assets = radial_menu_mod::asset_reader::Install();
+    const bool spells = radial_menu_mod::InitializeSpellManager();
+    const bool input = radial_menu_mod::input_hook::Install();
+    const bool d3d = radial_menu_mod::dx12_hook::Install();
+    radial_menu_mod::Log("Initialization completed (asset_reader=%d spell_manager=%d input=%d d3d=%d).",
+        static_cast<int>(assets),
+        static_cast<int>(spells),
+        static_cast<int>(input),
+        static_cast<int>(d3d));
     return 0;
 }
 
@@ -31,6 +36,7 @@ void ShutdownRadialMenu()
     radial_menu_mod::input_hook::Shutdown();
     MH_Uninitialize();
     radial_menu_mod::Log("Shutdown completed.");
+    radial_menu_mod::ShutdownLog();
 }
 
 }  // namespace

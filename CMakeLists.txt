@@ -28,6 +28,7 @@ endforeach()
 set(RSM_CORE_SOURCES
     src/core/dllmain.cpp
     src/core/common.h
+    src/core/log.cpp
 )
 
 set(RSM_GAME_SOURCES

@@ -12,6 +12,8 @@ std::uintptr_t g_cs_fe_man_static_address = 0;
 bool g_searched_cs_fe_man = false;
 bool g_logged_missing_cs_fe_man = false;
 bool g_logged_unreadable_cs_fe_man = false;
+bool g_cached_hud_state_valid = false;
+bool g_cached_normal_hud_state = false;
 
 template <typename T>
 bool ReadGameMemory(std::uintptr_t address, T& value)
@@ -26,9 +28,6 @@ std::uintptr_t ResolveCSFeMan()
     if (!g_searched_cs_fe_man) {
         g_searched_cs_fe_man = true;
         g_cs_fe_man_static_address = singleton_resolver::ResolveSingletonStaticAddress("CSFeMan");
-        if (g_cs_fe_man_static_address) {
-            Log("CSFeMan singleton resolved at 0x%p.", reinterpret_cast<void*>(g_cs_fe_man_static_address));
-        }
     }
 
     if (!g_cs_fe_man_static_address) return 0;
@@ -38,7 +37,7 @@ std::uintptr_t ResolveCSFeMan()
 
 }  // namespace
 
-bool IsNormalGameplayHudState()
+bool RefreshNormalGameplayHudState()
 {
     constexpr std::uintptr_t kHudStateOffset = 0x78;
     constexpr std::uint8_t kHudStateDefault = 3;
@@ -49,6 +48,8 @@ bool IsNormalGameplayHudState()
             g_logged_missing_cs_fe_man = true;
             Log("CSFeMan unresolved; radial menu input is disabled until HUD state can be read.");
         }
+        g_cached_hud_state_valid = true;
+        g_cached_normal_hud_state = false;
         return false;
     }
 
@@ -58,11 +59,25 @@ bool IsNormalGameplayHudState()
             Log("CSFeMan HUD state unreadable; radial menu input is disabled until HUD state can be read.");
             g_logged_unreadable_cs_fe_man = true;
         }
+        g_cached_hud_state_valid = true;
+        g_cached_normal_hud_state = false;
         return false;
     }
 
     g_logged_unreadable_cs_fe_man = false;
-    return hud_state == kHudStateDefault;
+    g_cached_hud_state_valid = true;
+    g_cached_normal_hud_state = hud_state == kHudStateDefault;
+    return g_cached_normal_hud_state;
+}
+
+bool GetCachedNormalGameplayHudState()
+{
+    return g_cached_hud_state_valid ? g_cached_normal_hud_state : RefreshNormalGameplayHudState();
+}
+
+bool IsNormalGameplayHudState()
+{
+    return GetCachedNormalGameplayHudState();
 }
 
 }  // namespace radial_menu_mod::gameplay_state

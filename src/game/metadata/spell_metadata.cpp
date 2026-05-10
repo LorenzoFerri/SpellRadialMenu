@@ -58,10 +58,7 @@ std::uint32_t ReadGoodsIconId(std::uintptr_t repo, std::uint32_t spell_id)
 
             offset = candidate;
             g_goods_param_offset = candidate;
-            if (!g_logged_goods_fallback) {
-                Log("Spell metadata: located EquipParamGoods by spell goods row fallback.");
-                g_logged_goods_fallback = true;
-            }
+            g_logged_goods_fallback = true;
             break;
         }
     }
@@ -93,10 +90,7 @@ std::uint32_t ReadAnyGoodsIconId(std::uintptr_t repo, std::uint32_t item_id)
         const auto icon_id = *reinterpret_cast<const std::uint16_t*>(row + kGoodsIconIdOffset);
         if (icon_id == 0) continue;
 
-        if (!g_logged_goods_fallback) {
-            Log("Spell metadata: located item goods row by fallback scan.");
-            g_logged_goods_fallback = true;
-        }
+        g_logged_goods_fallback = true;
         return static_cast<std::uint32_t>(icon_id);
     }
 

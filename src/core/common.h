@@ -3,52 +3,12 @@
 #include <windows.h>
 
 #include <array>
-#include <cstdarg>
 #include <cstdint>
-#include <cstdio>
-#include <cwchar>
 
 namespace radial_menu_mod {
 
-inline void Log(const char* format, ...)
-{
-    static bool log_initialized = false;
-
-    char buffer[1024] = {};
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-
-    OutputDebugStringA("[RadialMenu] ");
-    OutputDebugStringA(buffer);
-    OutputDebugStringA("\n");
-
-    // Write to RadialMenu.log next to the DLL
-    wchar_t log_path[MAX_PATH] = {};
-    HMODULE module = nullptr;
-    GetModuleHandleExW(
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCWSTR>(&Log), &module);
-    wchar_t module_path[MAX_PATH] = {};
-    GetModuleFileNameW(module, module_path, MAX_PATH);
-    wchar_t* sep = wcsrchr(module_path, L'\\');
-    if (sep) {
-        *(sep + 1) = L'\0';
-        swprintf(log_path, MAX_PATH, L"%lsRadialMenu.log", module_path);
-        const DWORD disposition = log_initialized ? OPEN_ALWAYS : CREATE_ALWAYS;
-        HANDLE file = CreateFileW(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                  nullptr, disposition, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file != INVALID_HANDLE_VALUE) {
-            log_initialized = true;
-            DWORD written = 0;
-            DWORD len = static_cast<DWORD>(strnlen(buffer, sizeof(buffer)));
-            WriteFile(file, buffer, len, &written, nullptr);
-            WriteFile(file, "\r\n", 2, &written, nullptr);
-            CloseHandle(file);
-        }
-    }
-}
+void Log(const char* format, ...);
+void ShutdownLog();
 
 // ── Pattern scanning helpers (used by spell_manager and spell_metadata) ───
 
