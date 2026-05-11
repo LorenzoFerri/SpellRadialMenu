@@ -13,14 +13,14 @@ enum class RadialKind {
     items,
 };
 
-struct ControllerContext {
-    bool trigger_down = false;
+struct RadialHoldState {
+    bool hold_down = false;
     bool radial_opened = false;
     RadialKind active_kind = RadialKind::none;
 };
 
-ControllerContext g_controller = {};
-std::vector<SpellSlot> g_open_spell_slots;
+RadialHoldState g_hold = {};
+std::vector<RadialSlot> g_open_radial_slots;
 RadialKind g_open_kind = RadialKind::none;
 
 bool CanStartRadialInput(RadialKind kind)
@@ -29,31 +29,31 @@ bool CanStartRadialInput(RadialKind kind)
         static bool logged = false;
         if (!logged) {
             logged = true;
-            Log("Action radial input blocked because cached gameplay HUD state is not ready.");
+            Log("Radial input blocked because cached gameplay HUD state is not ready.");
         }
         return false;
     }
     return kind != RadialKind::none;
 }
 
-void ResetTriggerState(ControllerContext& controller)
+void ResetHoldState(RadialHoldState& hold)
 {
-    controller.trigger_down = false;
-    controller.radial_opened = false;
-    controller.active_kind = RadialKind::none;
+    hold.hold_down = false;
+    hold.radial_opened = false;
+    hold.active_kind = RadialKind::none;
 }
 
-void BeginTriggerHold(ControllerContext& controller, RadialKind kind)
+void BeginRadialHold(RadialHoldState& hold, RadialKind kind)
 {
-    controller.trigger_down = true;
-    controller.radial_opened = false;
-    controller.active_kind = kind;
-    Log("Action radial hold started (kind=%s).", kind == RadialKind::items ? "items" : "spells");
+    hold.hold_down = true;
+    hold.radial_opened = false;
+    hold.active_kind = kind;
+    Log("Radial hold started (kind=%s).", kind == RadialKind::items ? "items" : "spells");
 }
 
 void LoadOpenRadialSlots(RadialKind kind)
 {
-    g_open_spell_slots = kind == RadialKind::items ? GetQuickItems() : GetMemorizedSpells();
+    g_open_radial_slots = kind == RadialKind::items ? GetQuickItems() : GetMemorizedSpells();
 }
 
 int CurrentSelectionFor(RadialKind kind)
@@ -61,66 +61,66 @@ int CurrentSelectionFor(RadialKind kind)
     return kind == RadialKind::items ? GetCurrentQuickItemSlot() : GetCurrentSpellSlot();
 }
 
-bool OpenRadial(ControllerContext& controller)
+bool OpenRadial(RadialHoldState& hold)
 {
-    LoadOpenRadialSlots(controller.active_kind);
-    if (g_open_spell_slots.empty()) {
-        Log("Action radial open failed because no slots were available (kind=%s).",
-            controller.active_kind == RadialKind::items ? "items" : "spells");
+    LoadOpenRadialSlots(hold.active_kind);
+    if (g_open_radial_slots.empty()) {
+        Log("Radial open failed because no slots were available (kind=%s).",
+            hold.active_kind == RadialKind::items ? "items" : "spells");
         g_open_kind = RadialKind::none;
-        ResetTriggerState(controller);
+        ResetHoldState(hold);
         return false;
     }
 
-    controller.radial_opened = true;
-    g_open_kind = controller.active_kind;
+    hold.radial_opened = true;
+    g_open_kind = hold.active_kind;
 
-    int initial_selection = CurrentSelectionFor(controller.active_kind);
+    int initial_selection = CurrentSelectionFor(hold.active_kind);
     if (initial_selection < 0) initial_selection = 0;
 
     radial_menu::Open(initial_selection);
-    Log("Action radial opened (kind=%s slots=%zu initial=%d).",
-        controller.active_kind == RadialKind::items ? "items" : "spells",
-        g_open_spell_slots.size(),
+    Log("Radial opened (kind=%s slots=%zu initial=%d).",
+        hold.active_kind == RadialKind::items ? "items" : "spells",
+        g_open_radial_slots.size(),
         initial_selection);
     return true;
 }
 
-void UpdateRadialSelection(const ControllerContext& controller, float right_stick_x, float right_stick_y)
+void UpdateRadialSelection(const RadialHoldState& hold, float selection_x, float selection_y)
 {
-    if (!controller.radial_opened) return;
-    radial_menu::UpdateSelectionFromStick(right_stick_x, right_stick_y, g_open_spell_slots.size());
+    if (!hold.radial_opened) return;
+    radial_menu::UpdateSelectionFromDirection(selection_x, selection_y, g_open_radial_slots.size());
 }
 
 void ConfirmRadialSelection(RadialKind active_kind)
 {
     const int selected_slot = radial_menu::GetSelectedSlot();
-    if (selected_slot < 0 || selected_slot >= static_cast<int>(g_open_spell_slots.size())) return;
+    if (selected_slot < 0 || selected_slot >= static_cast<int>(g_open_radial_slots.size())) return;
 
     const auto selected_index = static_cast<std::size_t>(selected_slot);
     if (active_kind == RadialKind::items) {
-        (void)SwitchToQuickItemSlot(g_open_spell_slots[selected_index].slot_index);
+        (void)SwitchToQuickItemSlot(g_open_radial_slots[selected_index].slot_index);
     } else {
-        (void)SwitchToSpellSlot(g_open_spell_slots[selected_index].slot_index);
+        (void)SwitchToSpellSlot(g_open_radial_slots[selected_index].slot_index);
     }
 }
 
 void CloseRadial()
 {
     radial_menu::Close();
-    g_open_spell_slots.clear();
+    g_open_radial_slots.clear();
     g_open_kind = RadialKind::none;
 }
 
-void HandleTriggerRelease(ControllerContext& controller)
+void HandleHoldRelease(RadialHoldState& hold)
 {
-    if (controller.radial_opened) {
-        ConfirmRadialSelection(controller.active_kind);
+    if (hold.radial_opened) {
+        ConfirmRadialSelection(hold.active_kind);
         CloseRadial();
-        Log("Action radial closed by release.");
+        Log("Radial closed by release.");
     }
 
-    ResetTriggerState(controller);
+    ResetHoldState(hold);
 }
 
 }  // namespace
@@ -128,60 +128,49 @@ void HandleTriggerRelease(ControllerContext& controller)
 void Reset()
 {
     radial_menu::Close();
-    g_controller = {};
-    g_open_spell_slots.clear();
+    g_hold = {};
+    g_open_radial_slots.clear();
     g_open_kind = RadialKind::none;
 }
 
-void HandleActionState(bool spell_held, bool item_held, float right_stick_x, float right_stick_y)
+void UpdateRadialHoldState(bool spell_hold_active, bool item_hold_active, float selection_x, float selection_y)
 {
-    auto& controller = g_controller;
-    const RadialKind pressed_kind = spell_held ? RadialKind::spells : (item_held ? RadialKind::items : RadialKind::none);
-    const bool trigger_pressed = controller.active_kind != RadialKind::none
-        ? pressed_kind == controller.active_kind
+    auto& hold = g_hold;
+    const RadialKind pressed_kind = spell_hold_active ? RadialKind::spells :
+        (item_hold_active ? RadialKind::items : RadialKind::none);
+    const bool hold_continues = hold.active_kind != RadialKind::none
+        ? pressed_kind == hold.active_kind
         : pressed_kind != RadialKind::none;
     bool checked_gameplay_state = false;
 
-    if (pressed_kind != RadialKind::none && !controller.trigger_down) {
+    if (pressed_kind != RadialKind::none && !hold.hold_down) {
         if (!CanStartRadialInput(pressed_kind)) return;
 
-        BeginTriggerHold(controller, pressed_kind);
+        BeginRadialHold(hold, pressed_kind);
         checked_gameplay_state = true;
     }
 
-    if (controller.trigger_down && !controller.radial_opened && !checked_gameplay_state) {
+    if (hold.hold_down && !hold.radial_opened && !checked_gameplay_state) {
         if (!gameplay_state::GetCachedNormalGameplayHudState()) {
-            ResetTriggerState(controller);
+            ResetHoldState(hold);
             return;
         }
     }
 
-    if (controller.trigger_down && trigger_pressed && !controller.radial_opened) {
-        if (!OpenRadial(controller)) return;
+    if (hold.hold_down && hold_continues && !hold.radial_opened) {
+        if (!OpenRadial(hold)) return;
     }
 
-    UpdateRadialSelection(controller, right_stick_x, right_stick_y);
+    UpdateRadialSelection(hold, selection_x, selection_y);
 
-    if (controller.trigger_down && !trigger_pressed) {
-        HandleTriggerRelease(controller);
+    if (hold.hold_down && !hold_continues) {
+        HandleHoldRelease(hold);
     }
 }
 
-void GetActionSuppressionState(bool& suppress_spell_switch, bool& suppress_item_switch)
+const std::vector<RadialSlot>& GetOpenRadialSlots()
 {
-    suppress_spell_switch = false;
-    suppress_item_switch = false;
-
-    if (g_controller.trigger_down || g_controller.radial_opened) {
-        if (g_controller.active_kind == RadialKind::spells) suppress_spell_switch = true;
-        if (g_controller.active_kind == RadialKind::items) suppress_item_switch = true;
-    }
-
-}
-
-const std::vector<SpellSlot>& GetOpenSpellSlots()
-{
-    return g_open_spell_slots;
+    return g_open_radial_slots;
 }
 
 const char* GetOpenMenuTitle()

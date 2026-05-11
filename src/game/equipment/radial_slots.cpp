@@ -1,4 +1,4 @@
-#include "game/equipment/spell_manager.h"
+#include "game/equipment/radial_slots.h"
 
 #include "core/common.h"
 #include "game/equipment/equip_access.h"
@@ -17,13 +17,13 @@ bool g_logged_no_equip_data = false;
 std::vector<std::uint32_t> g_last_spell_log_signature;
 std::vector<std::uint32_t> g_last_item_log_signature;
 
-void LogSlotSummaryIfChanged(const char* label, const std::vector<SpellSlot>& slots, std::vector<std::uint32_t>& last_signature)
+void LogSlotSummaryIfChanged(const char* label, const std::vector<RadialSlot>& slots, std::vector<std::uint32_t>& last_signature)
 {
     std::vector<std::uint32_t> signature;
     signature.reserve(slots.size() * 3);
-    for (const SpellSlot& slot : slots) {
+    for (const RadialSlot& slot : slots) {
         signature.push_back(static_cast<std::uint32_t>(slot.slot_index));
-        signature.push_back(slot.spell_id);
+        signature.push_back(slot.id);
         signature.push_back(slot.icon_id);
     }
 
@@ -32,9 +32,9 @@ void LogSlotSummaryIfChanged(const char* label, const std::vector<SpellSlot>& sl
 
     std::string summary;
     summary.reserve(slots.size() * 24);
-    for (const SpellSlot& slot : slots) {
+    for (const RadialSlot& slot : slots) {
         char entry[48] = {};
-        std::snprintf(entry, sizeof(entry), "%s%u:%u", summary.empty() ? "" : ",", slot.spell_id, slot.icon_id);
+        std::snprintf(entry, sizeof(entry), "%s%u:%u", summary.empty() ? "" : ",", slot.id, slot.icon_id);
         summary += entry;
     }
 
@@ -43,9 +43,10 @@ void LogSlotSummaryIfChanged(const char* label, const std::vector<SpellSlot>& sl
 
 }  // namespace
 
-bool InitializeSpellManager()
+bool InitializeRadialSlots()
 {
     InitializeSpellMetadata();
+    InitializeItemMetadata();
     const auto game_data_man = ResolveGameDataManAddress();
     if (!game_data_man) {
         Log("Failed to resolve GameDataMan; memorized spells will be unavailable.");
@@ -72,9 +73,9 @@ int GetCurrentSpellSlot()
     return -1;
 }
 
-std::vector<SpellSlot> GetMemorizedSpells()
+std::vector<RadialSlot> GetMemorizedSpells()
 {
-    std::vector<SpellSlot> spells;
+    std::vector<RadialSlot> spells;
     const auto equip_magic_data = ResolveEquipMagicData();
     if (!equip_magic_data) {
         if (!g_logged_no_equip_data) {
@@ -93,7 +94,7 @@ std::vector<SpellSlot> GetMemorizedSpells()
         const auto meta = ResolveSpellMetadata(spell_id);
         spells.push_back({
             .slot_index = i,
-            .spell_id   = spell_id,
+            .id         = spell_id,
             .name       = meta.name,
             .icon_id    = meta.icon_id,
             .category   = meta.category,
@@ -149,9 +150,9 @@ int GetCurrentQuickItemSlot()
     return -1;
 }
 
-std::vector<SpellSlot> GetQuickItems()
+std::vector<RadialSlot> GetQuickItems()
 {
-    std::vector<SpellSlot> items;
+    std::vector<RadialSlot> items;
     const auto equip_item_data = ResolveEquipItemData();
     if (!equip_item_data) return items;
 
@@ -164,7 +165,7 @@ std::vector<SpellSlot> GetQuickItems()
         const auto meta = ResolveItemMetadata(item_id);
         items.push_back({
             .slot_index = i,
-            .spell_id = item_id,
+            .id = item_id,
             .name = meta.name,
             .icon_id = meta.icon_id,
             .category = SpellCategory::unknown,

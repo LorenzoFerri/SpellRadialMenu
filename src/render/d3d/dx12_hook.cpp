@@ -1,8 +1,8 @@
 #include "render/d3d/dx12_hook.h"
 #include "core/common.h"
-#include "game/input/game_input_probe.h"
+#include "game/input/native_input.h"
 #include "game/state/gameplay_state.h"
-#include "input/input_hook.h"
+#include "input/radial_input.h"
 #include "render/d3d/dx12_vtable.h"
 #include "render/icons/icon_loader.h"
 #include "render/vfs/asset_reader.h"
@@ -286,7 +286,8 @@ static void RenderRadialOverlay(IDXGISwapChain3* swap_chain)
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    radial_menu::Draw(input_hook::GetOpenSpellSlots(), input_hook::GetOpenMenuTitle(), input_hook::GetOpenMenuControls());
+    radial_menu::Draw(radial_input::GetOpenRadialSlots(), radial_input::GetOpenMenuTitle(),
+        radial_input::GetOpenMenuControls());
 
     ImGui::Render();
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_cmdlist);
@@ -325,7 +326,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
     }
 
     const bool gameplay_ready = gameplay_state::RefreshNormalGameplayHudState();
-    game_input_probe::SampleFrame();
+    native_input::SampleFrame();
 
     if (!radial_menu::IsOpen()) {
         if (!g_icons_ready && gameplay_ready) {

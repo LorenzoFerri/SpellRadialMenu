@@ -1,9 +1,9 @@
-#include "game/input/game_input_probe.h"
+#include "game/input/native_input.h"
 
 #include "game/input/radial_camera.h"
 #include "game/input/radial_switch.h"
 
-namespace radial_menu_mod::game_input_probe {
+namespace radial_menu_mod::native_input {
 
 bool Initialize()
 {
@@ -18,4 +18,4 @@ void SampleFrame()
     radial_camera::SampleFrame();
 }
 
-}  // namespace radial_menu_mod::game_input_probe
+}  // namespace radial_menu_mod::native_input

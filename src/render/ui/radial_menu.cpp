@@ -8,7 +8,7 @@ namespace radial_menu_mod::radial_menu {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
-constexpr float kStickSelectionDeadzone = 0.42f;
+constexpr float kSelectionDirectionDeadzone = 0.42f;
 
 bool g_is_open = false;
 int g_selected_slot = -1;
@@ -43,21 +43,21 @@ int GetSelectedSlot()
     return g_selected_slot;
 }
 
-void UpdateSelectionFromStick(float stick_x, float stick_y, std::size_t slot_count)
+void UpdateSelectionFromDirection(float selection_x, float selection_y, std::size_t slot_count)
 {
     if (!g_is_open || slot_count == 0) return;
 
-    const float magnitude = std::sqrt((stick_x * stick_x) + (stick_y * stick_y));
-    if (magnitude < kStickSelectionDeadzone) return;
+    const float magnitude = std::sqrt((selection_x * selection_x) + (selection_y * selection_y));
+    if (magnitude < kSelectionDirectionDeadzone) return;
 
-    float angle = std::atan2(-stick_y, stick_x) + (kPi * 0.5f);
+    float angle = std::atan2(-selection_y, selection_x) + (kPi * 0.5f);
     if (angle < 0.0f) angle += 2.0f * kPi;
 
     const float segment_size = (2.0f * kPi) / static_cast<float>(slot_count);
     g_selected_slot = static_cast<int>(std::floor(angle / segment_size)) % static_cast<int>(slot_count);
 }
 
-void Draw(const std::vector<SpellSlot>& slots, const char* title, const char* controls)
+void Draw(const std::vector<RadialSlot>& slots, const char* title, const char* controls)
 {
     if (!g_is_open) return;
     DrawMenuContents(slots, title, controls, g_selected_slot, g_icon_texture_resolver);

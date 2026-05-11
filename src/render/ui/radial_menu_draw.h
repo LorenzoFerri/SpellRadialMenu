@@ -5,7 +5,7 @@
 namespace radial_menu_mod::radial_menu {
 
 void DrawMenuContents(
-    const std::vector<SpellSlot>& slots,
+    const std::vector<RadialSlot>& slots,
     const char* title,
     const char* controls,
     int selected_slot,

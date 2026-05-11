@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/metadata/item_metadata.h"
 #include "game/metadata/spell_metadata.h"
 
 #include <cstddef>
@@ -9,9 +10,9 @@
 
 namespace radial_menu_mod {
 
-struct SpellSlot {
+struct RadialSlot {
     std::size_t slot_index = 0;
-    std::uint32_t spell_id = 0;
+    std::uint32_t id = 0;
     std::string name;
     std::uint32_t icon_id = 0;
     SpellCategory category = SpellCategory::unknown;
@@ -20,12 +21,12 @@ struct SpellSlot {
     bool is_current = false;
 };
 
-bool InitializeSpellManager();
+bool InitializeRadialSlots();
 int GetCurrentSpellSlot();
-std::vector<SpellSlot> GetMemorizedSpells();
+std::vector<RadialSlot> GetMemorizedSpells();
 bool SwitchToSpellSlot(std::size_t slot_index);
 int GetCurrentQuickItemSlot();
-std::vector<SpellSlot> GetQuickItems();
+std::vector<RadialSlot> GetQuickItems();
 bool SwitchToQuickItemSlot(std::size_t slot_index);
 
 }  // namespace radial_menu_mod

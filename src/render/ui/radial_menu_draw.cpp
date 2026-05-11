@@ -26,17 +26,17 @@ struct RadialLayout {
     float center_panel_radius = 0.0f;
 };
 
-std::string FormatSlotLabel(const SpellSlot& slot)
+std::string FormatSlotLabel(const RadialSlot& slot)
 {
     if (!slot.occupied) return "Empty";
     if (!slot.name.empty()) return slot.name;
 
     char buffer[64] = {};
-    std::snprintf(buffer, sizeof(buffer), "Spell %u", slot.spell_id);
+    std::snprintf(buffer, sizeof(buffer), "%s %u", slot.is_item ? "Item" : "Spell", slot.id);
     return buffer;
 }
 
-const char* GetCategoryLabel(const SpellSlot& slot)
+const char* GetCategoryLabel(const RadialSlot& slot)
 {
     if (slot.is_item) return "ITEM";
 
@@ -51,7 +51,7 @@ const char* GetCategoryLabel(const SpellSlot& slot)
     }
 }
 
-ImU32 GetCategoryColor(const SpellSlot& slot, bool is_selected)
+ImU32 GetCategoryColor(const RadialSlot& slot, bool is_selected)
 {
     switch (slot.category) {
     case SpellCategory::sorcery:
@@ -189,7 +189,7 @@ void BeginOverlayWindow(const RadialLayout& layout)
     ImGui::Begin("RadialMenuOverlay", nullptr, flags);
 }
 
-void DrawSpellBadge(ImDrawList* draw_list, const ImVec2& center, const SpellSlot& slot, float scale,
+void DrawSlotIcon(ImDrawList* draw_list, const ImVec2& center, const RadialSlot& slot, float scale,
     IconTextureInfo(*icon_texture_resolver)(std::uint32_t icon_id))
 {
     if (icon_texture_resolver == nullptr || slot.icon_id == 0) return;
@@ -216,7 +216,7 @@ void DrawBackdrop(ImDrawList* draw_list, const RadialLayout& layout)
     draw_list->AddCircle(layout.center, layout.wheel_outer_radius - (4.0f * layout.ui_scale), IM_COL32(171, 148, 102, 170), 128, 1.5f * layout.ui_scale);
 }
 
-void DrawWheel(ImDrawList* draw_list, const RadialLayout& layout, const std::vector<SpellSlot>& slots,
+void DrawWheel(ImDrawList* draw_list, const RadialLayout& layout, const std::vector<RadialSlot>& slots,
     int selected_slot, IconTextureInfo(*icon_texture_resolver)(std::uint32_t icon_id))
 {
     const std::size_t slot_count = std::max<std::size_t>(slots.size(), 1);
@@ -239,7 +239,7 @@ void DrawWheel(ImDrawList* draw_list, const RadialLayout& layout, const std::vec
         AddArcStroke(draw_list, layout.center, layout.wheel_inner_radius + (8.0f * layout.ui_scale), start_angle + 0.03f, end_angle - 0.03f, inner_trim, 1.0f * layout.ui_scale);
         AddArcStroke(draw_list, layout.center, layout.wheel_outer_radius - (16.0f * layout.ui_scale), start_angle + 0.05f, end_angle - 0.05f, outer_trim, 1.0f * layout.ui_scale);
 
-        DrawSpellBadge(draw_list, icon_center, slots[i], layout.ui_scale, icon_texture_resolver);
+        DrawSlotIcon(draw_list, icon_center, slots[i], layout.ui_scale, icon_texture_resolver);
     }
 
     for (std::size_t i = 0; i < slot_count; ++i) {
@@ -258,12 +258,12 @@ void DrawCenterPanel(ImDrawList* draw_list, const RadialLayout& layout)
 }
 
 void DrawSelectedDetails(ImDrawList* draw_list, ImFont* font, float base_font_size, const RadialLayout& layout,
-    const std::vector<SpellSlot>& slots, const char* title, int selected_slot)
+    const std::vector<RadialSlot>& slots, const char* title, int selected_slot)
 {
     AddCenteredText(draw_list, font, base_font_size * 0.94f * layout.ui_scale, layout.center, layout.center.y - (48.0f * layout.ui_scale), IM_COL32(219, 206, 174, 220), title);
     if (selected_slot < 0 || selected_slot >= static_cast<int>(slots.size())) return;
 
-    const SpellSlot& slot = slots[static_cast<std::size_t>(selected_slot)];
+    const RadialSlot& slot = slots[static_cast<std::size_t>(selected_slot)];
     AddCenteredText(draw_list, font, base_font_size * 0.84f * layout.ui_scale, layout.center, layout.center.y - (28.0f * layout.ui_scale), GetCategoryColor(slot, true), GetCategoryLabel(slot));
 
     const float font_size = base_font_size * 0.96f * layout.ui_scale;
@@ -279,7 +279,7 @@ void DrawSelectedDetails(ImDrawList* draw_list, ImFont* font, float base_font_si
 
 }  // namespace
 
-void DrawMenuContents(const std::vector<SpellSlot>& slots, const char* title, const char* controls,
+void DrawMenuContents(const std::vector<RadialSlot>& slots, const char* title, const char* controls,
     int selected_slot, IconTextureInfo(*icon_texture_resolver)(std::uint32_t icon_id))
 {
     const RadialLayout layout = BuildLayout();

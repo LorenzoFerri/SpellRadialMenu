@@ -42,20 +42,23 @@ Initialization order:
 
 | File | Responsibility |
 |---|---|
-| `src/core/dllmain.cpp` | Starts one initialization thread and calls `MH_Initialize`, `InitializeSpellManager`, `asset_reader::Install`, `input_hook::Install`, and `dx12_hook::Install`. |
+| `src/core/dllmain.cpp` | Starts one initialization thread and calls `MH_Initialize`, `InitializeRadialSlots`, `asset_reader::Install`, `native_input::Initialize`, and `dx12_hook::Install`. |
 | `src/core/common.h` | Header-only utilities: logging, module info, pattern scanning, RIP-relative resolution, readable-memory checks, COM release helper. |
 | `src/game/equipment/equip_access.cpp` | Resolves `GameDataMan`, equip data, selected slots, and inventory item IDs. |
-| `src/game/equipment/spell_manager.cpp` | Builds spell and quick-item lists and writes selected spell/item slots. |
+| `src/game/equipment/radial_slots.cpp` | Builds spell and quick-item radial slot lists and writes selected slots. |
 | `src/game/messages/message_repository.cpp` | Resolves `MsgRepository` and localized runtime names. |
-| `src/game/metadata/spell_metadata.cpp` | Resolves spell/item icon IDs and spell categories from runtime params. |
+| `src/game/metadata/spell_metadata.cpp` | Resolves spell icon IDs and spell categories from runtime params. |
+| `src/game/metadata/item_metadata.cpp` | Resolves quick-item names and icon IDs from runtime params. |
 | `src/game/metadata/seamless_coop_metadata.cpp` | Extracts Seamless Coop item icon IDs from loaded `ersc.dll` code data. |
 | `src/game/params/param_repository.cpp` | Shared runtime param repository and row lookup helpers. |
 | `src/game/state/gameplay_state.cpp` | Checks normal gameplay HUD state through `CSFeMan`. |
 | `src/game/state/singleton_resolver.cpp` | Generic singleton static-address resolver used by gameplay-state code. |
-| `src/input/input_hook.cpp` | Hooks `XInputGetState`. |
-| `src/input/radial_input.cpp` | Owns radial input state, D-pad hold/tap handling, right-stick selection, and open-slot snapshots. |
+| `src/game/input/native_input.cpp` | Coordinates native radial switch and camera-input modules. |
+| `src/game/input/in_game_pad.cpp` | Caches game input-map resolution and polls native D-pad state. |
+| `src/game/input/radial_switch.cpp` | Owns D-pad hold/tap handling and native switch passthrough. |
+| `src/game/input/radial_camera.cpp` | Captures camera input acceleration for radial selection and suppresses camera movement while open. |
+| `src/input/radial_input.cpp` | Owns radial open/selection/confirm state and open-slot snapshots. |
 | `src/render/vfs/asset_reader.cpp` | Hooks the game VFS file open path and reads game assets. |
-| `src/render/assets/loose_asset_reader.cpp` | Looks for loose mod assets near the DLL when VFS lookup is unavailable. |
 | `src/render/assets/dcx.cpp` | Decompresses DCX/KRAK/DFLT containers. |
 | `src/render/assets/icon_assets.cpp` | Parses icon layouts, TPF entries, and encrypted Data0 icon ranges. |
 | `src/render/icons/icon_loader.cpp` | Coordinates icon asset loading, atlas upload, and icon UV lookup. |
@@ -99,7 +102,7 @@ Changing spell/quick-item memory offsets:
 
 Changing runtime param metadata:
 
-`src/game/metadata/spell_metadata.cpp` and `src/game/params/param_repository.cpp`
+`src/game/metadata/spell_metadata.cpp`, `src/game/metadata/item_metadata.cpp`, and `src/game/params/param_repository.cpp`
 
 Changing localized name lookup:
 
@@ -126,7 +129,8 @@ Then adjust the font size in `src/render/d3d/dx12_hook.cpp` where `AddFontFromMe
 - `src/game/metadata`: spell/item metadata resolution.
 - `src/game/params`: runtime param repository access.
 - `src/game/state`: gameplay/HUD state and singleton resolution.
-- `src/input`: XInput hook and radial input state machine.
+- `src/game/input`: native D-pad polling, radial switch capture, and camera-input selection/suppression.
+- `src/input`: radial open/selection/confirm state machine.
 - `src/render/assets`: file/asset parsing helpers.
 - `src/render/d3d`: D3D12 hook, vtable discovery, texture upload.
 - `src/render/icons`: icon atlas loading and UV lookup.

@@ -2,7 +2,6 @@
 
 #include "core/common.h"
 #include "game/messages/message_repository.h"
-#include "game/metadata/seamless_coop_metadata.h"
 #include "game/params/param_repository.h"
 
 #include <cstdio>
@@ -26,7 +25,6 @@ constexpr std::uint8_t   kGoodsTypeSpellBuff = 18;
 
 std::mutex g_cache_mutex;
 std::unordered_map<std::uint32_t, ResolvedSpellMetadata> g_metadata_cache;
-std::unordered_map<std::uint32_t, ResolvedItemMetadata> g_item_metadata_cache;
 std::uintptr_t g_goods_param_offset = 0;
 bool g_logged_goods_fallback = false;
 
@@ -69,32 +67,6 @@ std::uint32_t ReadGoodsIconId(std::uintptr_t repo, std::uint32_t spell_id)
 
     const auto icon_id = *reinterpret_cast<const std::uint16_t*>(data + kGoodsIconIdOffset);
     return icon_id != 0 ? static_cast<std::uint32_t>(icon_id) : 0;
-}
-
-std::uint32_t ReadAnyGoodsIconId(std::uintptr_t repo, std::uint32_t item_id)
-{
-    std::uintptr_t offset = LocateEquipParamGoodsOffset(repo);
-    if (offset) {
-        const std::uint8_t* data = param_repository::FindRowData(repo, offset, item_id);
-        if (data) {
-            const auto icon_id = *reinterpret_cast<const std::uint16_t*>(data + kGoodsIconIdOffset);
-            if (icon_id != 0) return static_cast<std::uint32_t>(icon_id);
-        }
-    }
-
-    for (std::uintptr_t candidate = 0; candidate < 0x1000; candidate += sizeof(void*)) {
-        if (candidate == kMagicParamOffset || candidate == offset) continue;
-        const std::uint8_t* row = param_repository::FindRowData(repo, candidate, item_id);
-        if (!row) continue;
-
-        const auto icon_id = *reinterpret_cast<const std::uint16_t*>(row + kGoodsIconIdOffset);
-        if (icon_id == 0) continue;
-
-        g_logged_goods_fallback = true;
-        return static_cast<std::uint32_t>(icon_id);
-    }
-
-    return 0;
 }
 
 struct RuntimeMagicMetadata { std::uint32_t icon_id = 0; SpellCategory category = SpellCategory::unknown; };
@@ -154,36 +126,6 @@ ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id)
     std::lock_guard lock(g_cache_mutex);
     g_metadata_cache[spell_id] = metadata;
 
-    return metadata;
-}
-
-ResolvedItemMetadata ResolveItemMetadata(std::uint32_t item_id)
-{
-    {
-        std::lock_guard lock(g_cache_mutex);
-        if (const auto it = g_item_metadata_cache.find(item_id); it != g_item_metadata_cache.end()) {
-            return it->second;
-        }
-    }
-
-    std::string name = message_repository::LookupGoodsName(item_id);
-    if (name.empty()) {
-        char buf[32] = {};
-        std::snprintf(buf, sizeof(buf), "Item %u", item_id);
-        name = buf;
-    }
-
-    std::uint32_t icon_id = 0;
-    const auto repo = param_repository::ResolveSoloParamRepository();
-    if (repo) icon_id = ReadAnyGoodsIconId(repo, item_id);
-    if (icon_id == 0) icon_id = seamless_coop_metadata::ResolveIconId(item_id);
-    ResolvedItemMetadata metadata{
-        .name = std::move(name),
-        .icon_id = icon_id,
-    };
-
-    std::lock_guard lock(g_cache_mutex);
-    g_item_metadata_cache[item_id] = metadata;
     return metadata;
 }
 

@@ -372,9 +372,9 @@ void UpdateSpellRadialState(float selection_x, float selection_y)
 
         if (!g_spell_capture.radial_started && now - g_spell_capture.pressed_ms >= kRadialHoldThresholdMs) {
             g_spell_capture.radial_started = true;
-            radial_input::HandleActionState(true, false, selection_x, selection_y);
+            radial_input::UpdateRadialHoldState(true, false, selection_x, selection_y);
         } else if (g_spell_capture.radial_started) {
-            radial_input::HandleActionState(true, false, selection_x, selection_y);
+            radial_input::UpdateRadialHoldState(true, false, selection_x, selection_y);
         }
         return;
     }
@@ -386,7 +386,7 @@ void UpdateSpellRadialState(float selection_x, float selection_y)
     ResetCapture(g_spell_capture);
 
     if (radial_started) {
-        radial_input::HandleActionState(false, false, selection_x, selection_y);
+        radial_input::UpdateRadialHoldState(false, false, selection_x, selection_y);
     } else if (held_ms < kRadialHoldThresholdMs) {
         PassThroughShortSwitchSpellTap();
     }
@@ -402,9 +402,9 @@ void UpdateItemRadialState(float selection_x, float selection_y)
 
         if (!g_item_capture.radial_started && now - g_item_capture.pressed_ms >= kRadialHoldThresholdMs) {
             g_item_capture.radial_started = true;
-            radial_input::HandleActionState(false, true, selection_x, selection_y);
+            radial_input::UpdateRadialHoldState(false, true, selection_x, selection_y);
         } else if (g_item_capture.radial_started) {
-            radial_input::HandleActionState(false, true, selection_x, selection_y);
+            radial_input::UpdateRadialHoldState(false, true, selection_x, selection_y);
         }
         return;
     }
@@ -416,7 +416,7 @@ void UpdateItemRadialState(float selection_x, float selection_y)
     ResetCapture(g_item_capture);
 
     if (radial_started) {
-        radial_input::HandleActionState(false, false, selection_x, selection_y);
+        radial_input::UpdateRadialHoldState(false, false, selection_x, selection_y);
     } else if (held_ms < kRadialHoldThresholdMs) {
         PassThroughShortSwitchItemTap();
     }

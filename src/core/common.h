@@ -10,7 +10,7 @@ namespace radial_menu_mod {
 void Log(const char* format, ...);
 void ShutdownLog();
 
-// ── Pattern scanning helpers (used by spell_manager and spell_metadata) ───
+// ── Pattern scanning helpers (used by metadata and singleton resolution) ───
 
 inline std::uintptr_t GetModuleBase()
 {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "game/equipment/spell_manager.h"
+#include "game/equipment/radial_slots.h"
 
 #include <imgui.h>
 
@@ -17,7 +17,7 @@ void Open(int initial_selection);
 void Close();
 bool IsOpen();
 int GetSelectedSlot();
-void UpdateSelectionFromStick(float stick_x, float stick_y, std::size_t slot_count);
-void Draw(const std::vector<SpellSlot>& slots, const char* title, const char* controls);
+void UpdateSelectionFromDirection(float selection_x, float selection_y, std::size_t slot_count);
+void Draw(const std::vector<RadialSlot>& slots, const char* title, const char* controls);
 
 }  // namespace radial_menu_mod::radial_menu

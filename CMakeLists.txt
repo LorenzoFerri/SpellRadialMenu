@@ -34,18 +34,20 @@ set(RSM_CORE_SOURCES
 set(RSM_GAME_SOURCES
     src/game/equipment/equip_access.cpp
     src/game/equipment/equip_access.h
-    src/game/equipment/spell_manager.cpp
-    src/game/equipment/spell_manager.h
-    src/game/input/game_input_probe.cpp
-    src/game/input/game_input_probe.h
+    src/game/equipment/radial_slots.cpp
+    src/game/equipment/radial_slots.h
     src/game/input/in_game_pad.cpp
     src/game/input/in_game_pad.h
+    src/game/input/native_input.cpp
+    src/game/input/native_input.h
     src/game/input/radial_camera.cpp
     src/game/input/radial_camera.h
     src/game/input/radial_switch.cpp
     src/game/input/radial_switch.h
     src/game/messages/message_repository.cpp
     src/game/messages/message_repository.h
+    src/game/metadata/item_metadata.cpp
+    src/game/metadata/item_metadata.h
     src/game/metadata/seamless_coop_metadata.cpp
     src/game/metadata/seamless_coop_metadata.h
     src/game/metadata/spell_metadata.cpp
@@ -59,8 +61,6 @@ set(RSM_GAME_SOURCES
 )
 
 set(RSM_INPUT_SOURCES
-    src/input/input_hook.cpp
-    src/input/input_hook.h
     src/input/radial_input.cpp
     src/input/radial_input.h
 )
