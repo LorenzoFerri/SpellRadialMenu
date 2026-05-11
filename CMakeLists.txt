@@ -36,6 +36,14 @@ set(RSM_GAME_SOURCES
     src/game/equipment/equip_access.h
     src/game/equipment/spell_manager.cpp
     src/game/equipment/spell_manager.h
+    src/game/input/game_input_probe.cpp
+    src/game/input/game_input_probe.h
+    src/game/input/in_game_pad.cpp
+    src/game/input/in_game_pad.h
+    src/game/input/radial_camera.cpp
+    src/game/input/radial_camera.h
+    src/game/input/radial_switch.cpp
+    src/game/input/radial_switch.h
     src/game/messages/message_repository.cpp
     src/game/messages/message_repository.h
     src/game/metadata/seamless_coop_metadata.cpp

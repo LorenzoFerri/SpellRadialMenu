@@ -1,8 +1,8 @@
 #include "render/d3d/dx12_hook.h"
 #include "core/common.h"
+#include "game/input/game_input_probe.h"
 #include "game/state/gameplay_state.h"
 #include "input/input_hook.h"
-#include "input/radial_input.h"
 #include "render/d3d/dx12_vtable.h"
 #include "render/icons/icon_loader.h"
 #include "render/vfs/asset_reader.h"
@@ -11,7 +11,6 @@
 
 #include <MinHook.h>
 #include <windows.h>
-#include <windowsx.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <imgui.h>
@@ -50,8 +49,6 @@ static bool                        g_logged_icon_vfs_unavailable = false;
 
 static HWND    g_hwnd        = nullptr;
 static WNDPROC g_old_wndproc = nullptr;
-static POINT g_last_mouse_pos = {};
-static bool g_have_last_mouse_pos = false;
 
 // ── hook plumbing ─────────────────────────────────────────────────────────
 using PFN_Present = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT);
@@ -72,44 +69,9 @@ static void* g_hook_resize_buffers1 = nullptr;
 static void* g_hook_set_fullscreen_state = nullptr;
 static void* g_hook_ecl     = nullptr;
 
-// ── WndProc ───────────────────────────────────────────────────────────────
-static bool IsKeyboardMouseTrigger(WPARAM key)
-{
-    return key == VK_TAB || key == VK_CAPITAL;
-}
-
-static void HandleMouseMove(LPARAM lparam)
-{
-    POINT pos{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-    if (g_have_last_mouse_pos) {
-        radial_input::AddMouseDelta(
-            static_cast<float>(pos.x - g_last_mouse_pos.x),
-            static_cast<float>(pos.y - g_last_mouse_pos.y));
-    }
-    g_last_mouse_pos = pos;
-    g_have_last_mouse_pos = true;
-}
-
 static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
 {
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
-
-    if (radial_menu::IsOpen()) {
-        if (msg == WM_INPUT) return 0;
-        if (msg == WM_MOUSEMOVE) {
-            HandleMouseMove(l);
-            return 0;
-        }
-        if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) return 0;
-        if ((msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) &&
-            IsKeyboardMouseTrigger(w)) {
-            return 0;
-        }
-    } else if (msg == WM_MOUSEMOVE) {
-        g_last_mouse_pos = POINT{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
-        g_have_last_mouse_pos = true;
-    }
-
     return CallWindowProcW(g_old_wndproc, hwnd, msg, w, l);
 }
 
@@ -212,7 +174,6 @@ static void ReleaseOverlayResources(const char* reason)
     g_rtv_stride = 0;
     g_hwnd = nullptr;
     g_old_wndproc = nullptr;
-    g_have_last_mouse_pos = false;
     Log("Overlay resources released for %s.", reason);
 }
 
@@ -350,13 +311,6 @@ static void CaptureDirectQueue(ID3D12CommandQueue* queue)
     }
 }
 
-static void PollKeyboardMouseRadial()
-{
-    const bool spell_held = (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
-    const bool item_held = (GetAsyncKeyState(VK_CAPITAL) & 0x8000) != 0;
-    radial_input::HandleKeyboardMouseState(spell_held, item_held);
-}
-
 // ── Present hook ──────────────────────────────────────────────────────────
 static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT sync, UINT flags)
 {
@@ -371,7 +325,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
     }
 
     const bool gameplay_ready = gameplay_state::RefreshNormalGameplayHudState();
-    PollKeyboardMouseRadial();
+    game_input_probe::SampleFrame();
 
     if (!radial_menu::IsOpen()) {
         if (!g_icons_ready && gameplay_ready) {
