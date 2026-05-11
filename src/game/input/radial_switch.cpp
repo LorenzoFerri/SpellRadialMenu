@@ -77,6 +77,7 @@ bool g_switch_spell_next_hook_installed = false;
 bool g_switch_spell_next_hook_failed = false;
 bool g_switch_item_next_hook_installed = false;
 bool g_switch_item_next_hook_failed = false;
+bool g_hook_installation_complete = false;
 
 bool g_logged_switch_spell_request_suppression = false;
 bool g_logged_switch_item_request_suppression = false;
@@ -133,6 +134,11 @@ bool IsSwitchSpell2Present()
 bool IsSwitchItem2Present()
 {
     return in_game_pad::PollInput(kSwitchItem2Input);
+}
+
+bool IsRadialActiveNow()
+{
+    return g_spell_capture.radial_started || g_item_capture.radial_started || radial_menu::IsOpen();
 }
 
 bool IsCaptureActive(CaptureState& capture, bool (*is_input_present)())
@@ -424,11 +430,12 @@ void UpdateRadialInputStates()
     if (!gameplay_state::GetCachedNormalGameplayHudState()) {
         ResetCapture(g_spell_capture);
         ResetCapture(g_item_capture);
+        in_game_pad::InvalidateCaches();
         return;
     }
 
-    UpdateSpellRadialState(selection_x, selection_y);
-    UpdateItemRadialState(selection_x, selection_y);
+    if (g_spell_capture.capture_active) UpdateSpellRadialState(selection_x, selection_y);
+    if (g_item_capture.capture_active) UpdateItemRadialState(selection_x, selection_y);
 }
 
 template <typename Fn>
@@ -464,6 +471,8 @@ void TryInstallHook(const char* name, std::uintptr_t rva, void* detour, Fn*& ori
 
 void TryInstallHooks()
 {
+    if (g_hook_installation_complete) return;
+
     TryInstallHook("Equipment HUD update", kEquipmentHudUpdateRva, reinterpret_cast<void*>(&HookedEquipmentHudUpdate),
         g_original_equipment_hud_update, g_equipment_hud_update_hook_installed, g_equipment_hud_update_hook_failed);
     TryInstallHook("SwitchSpell request-check", kSwitchSpellRequestCheckRva,
@@ -486,6 +495,16 @@ void TryInstallHooks()
         g_original_switch_spell_next, g_switch_spell_next_hook_installed, g_switch_spell_next_hook_failed);
     TryInstallHook("SwitchItem next-slot", kSwitchItemNextRva, reinterpret_cast<void*>(&HookedSwitchItemNext),
         g_original_switch_item_next, g_switch_item_next_hook_installed, g_switch_item_next_hook_failed);
+
+    g_hook_installation_complete = (g_equipment_hud_update_hook_installed || g_equipment_hud_update_hook_failed) &&
+        (g_switch_spell_request_hook_installed || g_switch_spell_request_hook_failed) &&
+        (g_switch_item_request_hook_installed || g_switch_item_request_hook_failed) &&
+        (g_switch_hold_hook_installed || g_switch_hold_hook_failed) &&
+        (g_switch_spell_repeat_hook_installed || g_switch_spell_repeat_hook_failed) &&
+        (g_switch_item_repeat_hook_installed || g_switch_item_repeat_hook_failed) &&
+        (g_can_switch_spell_hook_installed || g_can_switch_spell_hook_failed) &&
+        (g_switch_spell_next_hook_installed || g_switch_spell_next_hook_failed) &&
+        (g_switch_item_next_hook_installed || g_switch_item_next_hook_failed);
 }
 
 }  // namespace
@@ -504,7 +523,7 @@ void SampleFrame()
 
 bool IsRadialActive()
 {
-    return g_spell_capture.radial_started || g_item_capture.radial_started || radial_menu::IsOpen();
+    return IsRadialActiveNow();
 }
 
 }  // namespace radial_menu_mod::radial_switch

@@ -48,6 +48,30 @@ struct InputCodeState {
     bool state_2 = false;
 };
 
+struct CachedMappedInput {
+    std::int32_t mapped_input = -1;
+    std::uintptr_t code_state_address = 0;
+    std::int32_t virtual_input_index = -1;
+};
+
+struct CachedInput {
+    std::int32_t input = -1;
+    std::uintptr_t pad = 0;
+    std::uintptr_t input_devices = 0;
+    std::uintptr_t key_assign = 0;
+    std::uintptr_t input_type_group_tree = 0;
+    std::uintptr_t input_code_check_tree = 0;
+    std::uintptr_t virtual_input_index_tree = 0;
+    CachedMappedInput mappings[4] = {};
+    std::size_t mapping_count = 0;
+    ULONGLONG last_poll_ms = 0;
+    bool last_value = false;
+    bool valid = false;
+};
+
+std::uintptr_t g_cached_in_game_pad = 0;
+CachedInput g_cached_inputs[8] = {};
+
 template <typename T>
 bool ReadGameMemory(std::uintptr_t address, T& value)
 {
@@ -108,6 +132,25 @@ bool FindTreeValue(std::uintptr_t tree, std::int32_t key, T& value)
     return false;
 }
 
+std::uintptr_t FindTreeValueAddress(std::uintptr_t tree, std::int32_t key)
+{
+    TreeHeader tree_header = {};
+    if (!ReadGameMemory(tree, tree_header) || !tree_header.head || tree_header.size > 1024) return 0;
+
+    TreeNodeHeader head_header = {};
+    if (!ReadGameMemory(tree_header.head, head_header) || !head_header.parent) return 0;
+
+    auto node = TreeMinNode(head_header.parent);
+    for (std::uintptr_t i = 0; node && node != tree_header.head && i < tree_header.size; ++i) {
+        std::int32_t node_key = 0;
+        if (!ReadGameMemory(node + 0x1C, node_key)) return 0;
+        if (node_key == key) return node + 0x20;
+        node = TreeNextNode(node, tree_header.head);
+    }
+
+    return 0;
+}
+
 std::uintptr_t ResolveFD4PadManager()
 {
     static std::uintptr_t static_address = 0;
@@ -127,6 +170,18 @@ bool ResolveInGamePad(std::uintptr_t& in_game_pad)
 {
     in_game_pad = 0;
 
+    if (g_cached_in_game_pad) {
+        std::uintptr_t vtable = 0;
+        const auto module_base = GetModuleBase();
+        if (ReadGameMemory(g_cached_in_game_pad, vtable) && vtable >= module_base &&
+            static_cast<std::uint32_t>(vtable - module_base) == kInGamePadUserInputVtableRva) {
+            in_game_pad = g_cached_in_game_pad;
+            return true;
+        }
+
+        g_cached_in_game_pad = 0;
+    }
+
     const auto pad_manager = ResolveFD4PadManager();
     if (!pad_manager) return false;
 
@@ -141,6 +196,7 @@ bool ResolveInGamePad(std::uintptr_t& in_game_pad)
 
         if (static_cast<std::uint32_t>(vtable - module_base) == kInGamePadUserInputVtableRva) {
             in_game_pad = pad;
+            g_cached_in_game_pad = pad;
             return true;
         }
     }
@@ -176,6 +232,71 @@ bool ReadVirtualDigitalInput(std::uintptr_t input_devices, std::int32_t virtual_
     return ((row >> (virtual_input_index & 31)) & 1u) != 0;
 }
 
+CachedInput& CacheForInput(std::int32_t input)
+{
+    for (auto& cached : g_cached_inputs) {
+        if (cached.valid && cached.input == input) return cached;
+    }
+
+    for (auto& cached : g_cached_inputs) {
+        if (!cached.valid) return cached;
+    }
+
+    return g_cached_inputs[0];
+}
+
+bool BuildInputCache(std::int32_t input, std::uintptr_t pad, CachedInput& cached)
+{
+    cached = {};
+    cached.input = input;
+    cached.pad = pad;
+
+    if (!ReadGameMemory(pad + kPadPadDeviceOffset, cached.input_devices) || !cached.input_devices ||
+        !ReadGameMemory(pad + kPadKeyAssignOffset, cached.key_assign) || !cached.key_assign ||
+        !ReadGameMemory(pad + kPadInputTypeGroupOffset, cached.input_type_group_tree) || !cached.input_type_group_tree ||
+        !ReadGameMemory(pad + kPadInputCodeCheckOffset, cached.input_code_check_tree) || !cached.input_code_check_tree ||
+        !ReadGameMemory(cached.key_assign + kKeyAssignVirtualInputIndexMapOffset, cached.virtual_input_index_tree) ||
+        !cached.virtual_input_index_tree) {
+        cached = {};
+        return false;
+    }
+
+    InputTypeGroup group = {};
+    if (!FindTreeValue(cached.input_type_group_tree, input, group)) {
+        cached = {};
+        return false;
+    }
+
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto mapped_input = group.mapped_inputs[i];
+        if (mapped_input == -1 || group.input_types[i] != 0) continue;
+
+        const auto code_state_address = FindTreeValueAddress(cached.input_code_check_tree, mapped_input);
+        std::int32_t virtual_input_index = -1;
+        if (!code_state_address || !FindTreeValue(cached.virtual_input_index_tree, mapped_input, virtual_input_index)) continue;
+
+        auto& mapping = cached.mappings[cached.mapping_count++];
+        mapping.mapped_input = mapped_input;
+        mapping.code_state_address = code_state_address;
+        mapping.virtual_input_index = virtual_input_index;
+    }
+
+    cached.valid = cached.mapping_count != 0;
+    return cached.valid;
+}
+
+bool ReadCachedInputState(const CachedInput& cached)
+{
+    for (std::size_t i = 0; i < cached.mapping_count; ++i) {
+        const auto& mapping = cached.mappings[i];
+        InputCodeState code_state = {};
+        if (!ReadGameMemory(mapping.code_state_address, code_state) || !code_state.state_1 || code_state.state_2) continue;
+        if (ReadVirtualDigitalInput(cached.input_devices, mapping.virtual_input_index)) return true;
+    }
+
+    return false;
+}
+
 }  // namespace
 
 bool PollInput(std::int32_t input)
@@ -186,41 +307,26 @@ bool PollInput(std::int32_t input)
     bool allow_polling = false;
     if (!ReadGameMemory(pad + kPadAllowPollingOffset, allow_polling) || !allow_polling) return false;
 
-    std::uintptr_t input_devices = 0;
-    std::uintptr_t key_assign = 0;
-    std::uintptr_t input_type_group_tree = 0;
-    std::uintptr_t input_code_check_tree = 0;
-    if (!ReadGameMemory(pad + kPadPadDeviceOffset, input_devices) || !input_devices ||
-        !ReadGameMemory(pad + kPadKeyAssignOffset, key_assign) || !key_assign ||
-        !ReadGameMemory(pad + kPadInputTypeGroupOffset, input_type_group_tree) || !input_type_group_tree ||
-        !ReadGameMemory(pad + kPadInputCodeCheckOffset, input_code_check_tree) || !input_code_check_tree) {
+    auto& cached = CacheForInput(input);
+    const auto now = GetTickCount64();
+    if (cached.valid && cached.input == input && cached.last_poll_ms == now) return cached.last_value;
+
+    if ((!cached.valid || cached.input != input || cached.pad != pad) && !BuildInputCache(input, pad, cached)) {
         return false;
     }
 
-    InputTypeGroup group = {};
-    if (!FindTreeValue(input_type_group_tree, input, group)) return false;
+    const bool value = ReadCachedInputState(cached);
+    cached.last_poll_ms = now;
+    cached.last_value = value;
+    return value;
+}
 
-    std::uintptr_t virtual_input_index_tree = 0;
-    if (!ReadGameMemory(key_assign + kKeyAssignVirtualInputIndexMapOffset, virtual_input_index_tree) ||
-        !virtual_input_index_tree) {
-        return false;
+void InvalidateCaches()
+{
+    g_cached_in_game_pad = 0;
+    for (auto& cached : g_cached_inputs) {
+        cached = {};
     }
-
-    for (std::size_t i = 0; i < 4; ++i) {
-        const auto mapped_input = group.mapped_inputs[i];
-        if (mapped_input == -1 || group.input_types[i] != 0) continue;
-
-        InputCodeState code_state = {};
-        std::int32_t virtual_input_index = -1;
-        if (!FindTreeValue(input_code_check_tree, mapped_input, code_state) || !code_state.state_1 ||
-            code_state.state_2 || !FindTreeValue(virtual_input_index_tree, mapped_input, virtual_input_index)) {
-            continue;
-        }
-
-        if (ReadVirtualDigitalInput(input_devices, virtual_input_index)) return true;
-    }
-
-    return false;
 }
 
 }  // namespace radial_menu_mod::in_game_pad
