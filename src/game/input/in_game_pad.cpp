@@ -321,6 +321,40 @@ bool PollInput(std::int32_t input)
     return value;
 }
 
+bool EnsureInputCached(std::int32_t input)
+{
+    std::uintptr_t pad = 0;
+    if (!ResolveInGamePad(pad)) return false;
+
+    bool allow_polling = false;
+    if (!ReadGameMemory(pad + kPadAllowPollingOffset, allow_polling) || !allow_polling) return false;
+
+    auto& cached = CacheForInput(input);
+    if (cached.valid && cached.input == input && cached.pad == pad) return true;
+    return BuildInputCache(input, pad, cached);
+}
+
+bool PollInputIfCached(std::int32_t input)
+{
+    std::uintptr_t pad = g_cached_in_game_pad;
+    if (!pad) return false;
+
+    std::uintptr_t vtable = 0;
+    const auto module_base = GetModuleBase();
+    if (!ReadGameMemory(pad, vtable) || vtable < module_base ||
+        static_cast<std::uint32_t>(vtable - module_base) != kInGamePadUserInputVtableRva) {
+        return false;
+    }
+
+    bool allow_polling = false;
+    if (!ReadGameMemory(pad + kPadAllowPollingOffset, allow_polling) || !allow_polling) return false;
+
+    for (const auto& cached : g_cached_inputs) {
+        if (cached.valid && cached.input == input && cached.pad == pad) return ReadCachedInputState(cached);
+    }
+    return false;
+}
+
 void InvalidateCaches()
 {
     g_cached_in_game_pad = 0;

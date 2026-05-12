@@ -80,6 +80,8 @@ bool g_switch_spell_next_hook_failed = false;
 bool g_switch_item_next_hook_installed = false;
 bool g_switch_item_next_hook_failed = false;
 bool g_hook_installation_complete = false;
+int g_input_cache_warm_phase = 0;
+bool g_input_cache_warmed = false;
 
 bool g_logged_switch_spell_request_suppression = false;
 bool g_logged_switch_item_request_suppression = false;
@@ -138,12 +140,12 @@ bool IsNativeActionStillDown(const CaptureState& capture, ULONGLONG now)
 
 bool IsSwitchSpell2Present()
 {
-    return in_game_pad::PollInput(kSwitchSpell2Input);
+    return in_game_pad::PollInputIfCached(kSwitchSpell2Input);
 }
 
 bool IsSwitchItem2Present()
 {
-    return in_game_pad::PollInput(kSwitchItem2Input);
+    return in_game_pad::PollInputIfCached(kSwitchItem2Input);
 }
 
 bool IsRadialActiveNow()
@@ -375,7 +377,8 @@ void PassThroughShortSwitchItemTap()
 void UpdateSpellRadialState(float selection_x, float selection_y)
 {
     const auto now = GetTickCount64();
-    const bool is_down = IsNativeActionStillDown(g_spell_capture, now) || IsSwitchSpell2Present();
+    const bool is_down = IsNativeActionStillDown(g_spell_capture, now) ||
+        IsSwitchSpell2Present();
 
     if (is_down) {
         if (!g_spell_capture.input_down) BeginCapture(g_spell_capture);
@@ -392,12 +395,11 @@ void UpdateSpellRadialState(float selection_x, float selection_y)
     if (!g_spell_capture.input_down) return;
 
     const bool radial_started = g_spell_capture.radial_started;
-    const auto held_ms = now - g_spell_capture.pressed_ms;
     ResetCapture(g_spell_capture);
 
     if (radial_started) {
         radial_input::UpdateRadialHoldState(false, false, selection_x, selection_y);
-    } else if (held_ms < kRadialHoldThresholdMs) {
+    } else {
         PassThroughShortSwitchSpellTap();
     }
 }
@@ -405,7 +407,8 @@ void UpdateSpellRadialState(float selection_x, float selection_y)
 void UpdateItemRadialState(float selection_x, float selection_y)
 {
     const auto now = GetTickCount64();
-    const bool is_down = IsNativeActionStillDown(g_item_capture, now) || IsSwitchItem2Present();
+    const bool is_down = IsNativeActionStillDown(g_item_capture, now) ||
+        IsSwitchItem2Present();
 
     if (is_down) {
         if (!g_item_capture.input_down) BeginCapture(g_item_capture);
@@ -422,12 +425,11 @@ void UpdateItemRadialState(float selection_x, float selection_y)
     if (!g_item_capture.input_down) return;
 
     const bool radial_started = g_item_capture.radial_started;
-    const auto held_ms = now - g_item_capture.pressed_ms;
     ResetCapture(g_item_capture);
 
     if (radial_started) {
         radial_input::UpdateRadialHoldState(false, false, selection_x, selection_y);
-    } else if (held_ms < kRadialHoldThresholdMs) {
+    } else {
         PassThroughShortSwitchItemTap();
     }
 }
@@ -441,7 +443,23 @@ void UpdateRadialInputStates()
         ResetCapture(g_spell_capture);
         ResetCapture(g_item_capture);
         in_game_pad::InvalidateCaches();
+        g_input_cache_warm_phase = 0;
+        g_input_cache_warmed = false;
         return;
+    }
+
+    if (!g_input_cache_warmed) {
+        if (g_input_cache_warm_phase == 0) {
+            if (in_game_pad::EnsureInputCached(kSwitchSpell2Input)) g_input_cache_warm_phase = 1;
+            return;
+        }
+        if (g_input_cache_warm_phase == 1) {
+            if (in_game_pad::EnsureInputCached(kSwitchItem2Input)) {
+                g_input_cache_warm_phase = 2;
+                g_input_cache_warmed = true;
+            }
+            return;
+        }
     }
 
     if (g_spell_capture.capture_active) UpdateSpellRadialState(selection_x, selection_y);
