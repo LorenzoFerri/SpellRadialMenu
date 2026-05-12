@@ -26,6 +26,20 @@ struct RadialLayout {
     float center_panel_radius = 0.0f;
 };
 
+struct SelectedDetailsCache {
+    const ImFont* font = nullptr;
+    float font_size = 0.0f;
+    float wrap_width = 0.0f;
+    std::uint32_t id = 0;
+    bool occupied = false;
+    bool is_item = false;
+    std::string name;
+    std::vector<std::string> label_lines;
+    bool valid = false;
+};
+
+SelectedDetailsCache g_selected_details_cache = {};
+
 std::string FormatSlotLabel(const RadialSlot& slot)
 {
     if (!slot.occupied) return "Empty";
@@ -189,12 +203,8 @@ void BeginOverlayWindow(const RadialLayout& layout)
     ImGui::Begin("RadialMenuOverlay", nullptr, flags);
 }
 
-void DrawSlotIcon(ImDrawList* draw_list, const ImVec2& center, const RadialSlot& slot, float scale,
-    IconTextureInfo(*icon_texture_resolver)(std::uint32_t icon_id))
+void DrawSlotIcon(ImDrawList* draw_list, const ImVec2& center, const IconTextureInfo& icon, float scale)
 {
-    if (icon_texture_resolver == nullptr || slot.icon_id == 0) return;
-
-    const IconTextureInfo icon = icon_texture_resolver(slot.icon_id);
     if (icon.texture == ImTextureID{}) return;
 
     const float half_extent = 40.0f * scale;
@@ -217,7 +227,7 @@ void DrawBackdrop(ImDrawList* draw_list, const RadialLayout& layout)
 }
 
 void DrawWheel(ImDrawList* draw_list, const RadialLayout& layout, const std::vector<RadialSlot>& slots,
-    int selected_slot, IconTextureInfo(*icon_texture_resolver)(std::uint32_t icon_id))
+    int selected_slot, const std::vector<IconTextureInfo>& icon_textures)
 {
     const std::size_t slot_count = std::max<std::size_t>(slots.size(), 1);
     const float step = (2.0f * kPi) / static_cast<float>(slot_count);
@@ -239,7 +249,9 @@ void DrawWheel(ImDrawList* draw_list, const RadialLayout& layout, const std::vec
         AddArcStroke(draw_list, layout.center, layout.wheel_inner_radius + (8.0f * layout.ui_scale), start_angle + 0.03f, end_angle - 0.03f, inner_trim, 1.0f * layout.ui_scale);
         AddArcStroke(draw_list, layout.center, layout.wheel_outer_radius - (16.0f * layout.ui_scale), start_angle + 0.05f, end_angle - 0.05f, outer_trim, 1.0f * layout.ui_scale);
 
-        DrawSlotIcon(draw_list, icon_center, slots[i], layout.ui_scale, icon_texture_resolver);
+        const IconTextureInfo empty_icon = {};
+        DrawSlotIcon(draw_list, icon_center, i < icon_textures.size() ? icon_textures[i] : empty_icon,
+            layout.ui_scale);
     }
 
     for (std::size_t i = 0; i < slot_count; ++i) {
@@ -267,7 +279,23 @@ void DrawSelectedDetails(ImDrawList* draw_list, ImFont* font, float base_font_si
     AddCenteredText(draw_list, font, base_font_size * 0.84f * layout.ui_scale, layout.center, layout.center.y - (28.0f * layout.ui_scale), GetCategoryColor(slot, true), GetCategoryLabel(slot));
 
     const float font_size = base_font_size * 0.96f * layout.ui_scale;
-    const std::vector<std::string> label_lines = WrapTextLines(font, font_size, FormatSlotLabel(slot), layout.center_panel_radius * 1.52f, 2);
+    const float wrap_width = layout.center_panel_radius * 1.52f;
+    if (!g_selected_details_cache.valid || g_selected_details_cache.font != font ||
+        g_selected_details_cache.font_size != font_size || g_selected_details_cache.wrap_width != wrap_width ||
+        g_selected_details_cache.id != slot.id || g_selected_details_cache.occupied != slot.occupied ||
+        g_selected_details_cache.is_item != slot.is_item || g_selected_details_cache.name != slot.name) {
+        g_selected_details_cache.font = font;
+        g_selected_details_cache.font_size = font_size;
+        g_selected_details_cache.wrap_width = wrap_width;
+        g_selected_details_cache.id = slot.id;
+        g_selected_details_cache.occupied = slot.occupied;
+        g_selected_details_cache.is_item = slot.is_item;
+        g_selected_details_cache.name = slot.name;
+        g_selected_details_cache.label_lines = WrapTextLines(font, font_size, FormatSlotLabel(slot), wrap_width, 2);
+        g_selected_details_cache.valid = true;
+    }
+
+    const std::vector<std::string>& label_lines = g_selected_details_cache.label_lines;
     const float line_height = font_size + (2.0f * layout.ui_scale);
     float line_y = layout.center.y + (14.0f * layout.ui_scale);
     if (label_lines.size() > 1) line_y -= (line_height * 0.35f);
@@ -280,7 +308,7 @@ void DrawSelectedDetails(ImDrawList* draw_list, ImFont* font, float base_font_si
 }  // namespace
 
 void DrawMenuContents(const std::vector<RadialSlot>& slots, const char* title, const char* controls,
-    int selected_slot, IconTextureInfo(*icon_texture_resolver)(std::uint32_t icon_id))
+    int selected_slot, const std::vector<IconTextureInfo>& icon_textures)
 {
     const RadialLayout layout = BuildLayout();
     BeginOverlayWindow(layout);
@@ -290,13 +318,18 @@ void DrawMenuContents(const std::vector<RadialSlot>& slots, const char* title, c
     const float base_font_size = ImGui::GetFontSize();
 
     DrawBackdrop(draw_list, layout);
-    DrawWheel(draw_list, layout, slots, selected_slot, icon_texture_resolver);
+    DrawWheel(draw_list, layout, slots, selected_slot, icon_textures);
     DrawCenterPanel(draw_list, layout);
     DrawSelectedDetails(draw_list, font, base_font_size, layout, slots, title, selected_slot);
     AddCenteredText(draw_list, font, base_font_size * 0.84f * layout.ui_scale, layout.center,
         layout.center.y + layout.wheel_outer_radius + (28.0f * layout.ui_scale), IM_COL32(220, 213, 197, 220), controls);
 
     ImGui::End();
+}
+
+void InvalidateMenuDrawCache()
+{
+    g_selected_details_cache = {};
 }
 
 }  // namespace radial_menu_mod::radial_menu

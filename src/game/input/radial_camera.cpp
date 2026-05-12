@@ -10,6 +10,11 @@
 namespace radial_menu_mod::radial_camera {
 namespace {
 
+struct ReadableRegion {
+    std::uintptr_t begin = 0;
+    std::uintptr_t end = 0;
+};
+
 constexpr std::uintptr_t kChrCamInputAccelerationUpdateRva = 0x3B2060;
 constexpr std::uintptr_t kChrCamPadAccelerationOffset = 0x90;
 constexpr std::uintptr_t kChrCamMoveAccelerationOffset = 0xA0;
@@ -30,6 +35,10 @@ bool g_logged_camera_acceleration_suppression = false;
 
 float g_selection_x = 0.0f;
 float g_selection_y = 0.0f;
+std::uintptr_t g_cached_chr_cam = 0;
+ReadableRegion g_pad_acceleration_region = {};
+ReadableRegion g_move_acceleration_region = {};
+ReadableRegion g_lock_on_input_region = {};
 
 ChrCamInputAccelerationUpdateFn g_original_chr_cam_input_acceleration_update = nullptr;
 RadialActiveFn g_is_radial_active = nullptr;
@@ -46,6 +55,64 @@ bool IsRadialActive()
     return g_is_radial_active != nullptr && g_is_radial_active();
 }
 
+bool IsInRegion(const ReadableRegion& region, std::uintptr_t address, std::size_t bytes)
+{
+    return region.begin != 0 && address >= region.begin && address + bytes >= address && address + bytes <= region.end;
+}
+
+bool RefreshReadableRegion(std::uintptr_t address, std::size_t bytes, ReadableRegion& region)
+{
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!address || VirtualQuery(reinterpret_cast<const void*>(address), &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+    if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) || (mbi.Protect & PAGE_NOACCESS)) return false;
+
+    const DWORD protect = mbi.Protect & 0xFFu;
+    const bool readable = protect == PAGE_READONLY || protect == PAGE_READWRITE || protect == PAGE_WRITECOPY ||
+        protect == PAGE_EXECUTE_READ || protect == PAGE_EXECUTE_READWRITE || protect == PAGE_EXECUTE_WRITECOPY;
+    if (!readable) return false;
+
+    const auto begin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+    const auto end = begin + static_cast<std::uintptr_t>(mbi.RegionSize);
+    if (address < begin || address + bytes < address || address + bytes > end) return false;
+
+    region.begin = begin;
+    region.end = end;
+    return true;
+}
+
+bool ReadFloatArray(std::uintptr_t address, float* values, std::size_t count, ReadableRegion& region)
+{
+    const std::size_t bytes = sizeof(float) * count;
+    if (!IsInRegion(region, address, bytes) && !RefreshReadableRegion(address, bytes, region)) return false;
+
+    const auto* source = reinterpret_cast<const float*>(address);
+    for (std::size_t i = 0; i < count; ++i) values[i] = source[i];
+    return true;
+}
+
+bool ClearFloatArray(std::uintptr_t address, std::size_t count, ReadableRegion& region)
+{
+    const std::size_t bytes = sizeof(float) * count;
+    if (!IsInRegion(region, address, bytes) && !RefreshReadableRegion(address, bytes, region)) return false;
+
+    auto* values = reinterpret_cast<float*>(address);
+    for (std::size_t i = 0; i < count; ++i) values[i] = 0.0f;
+    return true;
+}
+
+bool ClearFloat(std::uintptr_t address, ReadableRegion& region)
+{
+    if (!IsInRegion(region, address, sizeof(float)) && !RefreshReadableRegion(address, sizeof(float), region)) return false;
+
+    *reinterpret_cast<float*>(address) = 0.0f;
+    return true;
+}
+
+ReadableRegion& RegionForAccelerationOffset(std::uintptr_t acceleration_offset)
+{
+    return acceleration_offset == kChrCamPadAccelerationOffset ? g_pad_acceleration_region : g_move_acceleration_region;
+}
+
 bool CaptureChrCamAccelerationAsSelection(std::uintptr_t chr_cam,
     std::uintptr_t acceleration_offset,
     float deadzone,
@@ -58,12 +125,9 @@ bool CaptureChrCamAccelerationAsSelection(std::uintptr_t chr_cam,
     if (!chr_cam || !IsRadialActive()) return false;
 
     float values[4] = {};
-    if (!IsReadableMemory(reinterpret_cast<const void*>(chr_cam + acceleration_offset), sizeof(values))) {
+    if (!ReadFloatArray(chr_cam + acceleration_offset, values, 4, RegionForAccelerationOffset(acceleration_offset))) {
         return false;
     }
-
-    const auto* source = reinterpret_cast<const float*>(chr_cam + acceleration_offset);
-    for (std::size_t i = 0; i < 4; ++i) values[i] = source[i];
 
     const float selection_x = values[1] * x_sign;
     const float selection_y = values[0] * y_sign;
@@ -105,19 +169,11 @@ void ClearChrCamAcceleration(std::uintptr_t chr_cam)
     if (!chr_cam) return;
 
     constexpr std::size_t kAccelerationElementCount = 4;
-    if (IsReadableMemory(reinterpret_cast<const void*>(chr_cam + kChrCamPadAccelerationOffset),
-        sizeof(float) * kAccelerationElementCount)) {
-        auto* pad_acceleration = reinterpret_cast<float*>(chr_cam + kChrCamPadAccelerationOffset);
-        for (std::size_t i = 0; i < kAccelerationElementCount; ++i) pad_acceleration[i] = 0.0f;
-    }
-    if (IsReadableMemory(reinterpret_cast<const void*>(chr_cam + kChrCamMoveAccelerationOffset),
-        sizeof(float) * kAccelerationElementCount)) {
-        auto* move_acceleration = reinterpret_cast<float*>(chr_cam + kChrCamMoveAccelerationOffset);
-        for (std::size_t i = 0; i < kAccelerationElementCount; ++i) move_acceleration[i] = 0.0f;
-    }
-    if (IsReadableMemory(reinterpret_cast<const void*>(chr_cam + kChrCamLockOnInputOffset), sizeof(float))) {
-        *reinterpret_cast<float*>(chr_cam + kChrCamLockOnInputOffset) = 0.0f;
-    }
+    (void)ClearFloatArray(chr_cam + kChrCamPadAccelerationOffset, kAccelerationElementCount,
+        g_pad_acceleration_region);
+    (void)ClearFloatArray(chr_cam + kChrCamMoveAccelerationOffset, kAccelerationElementCount,
+        g_move_acceleration_region);
+    (void)ClearFloat(chr_cam + kChrCamLockOnInputOffset, g_lock_on_input_region);
 }
 
 void HookedChrCamInputAccelerationUpdate(void* chr_cam, bool enabled)
@@ -129,6 +185,12 @@ void HookedChrCamInputAccelerationUpdate(void* chr_cam, bool enabled)
     if (!IsRadialActive() || chr_cam == nullptr) return;
 
     const auto chr_cam_address = reinterpret_cast<std::uintptr_t>(chr_cam);
+    if (g_cached_chr_cam != chr_cam_address) {
+        g_cached_chr_cam = chr_cam_address;
+        g_pad_acceleration_region = {};
+        g_move_acceleration_region = {};
+        g_lock_on_input_region = {};
+    }
     (void)CaptureSelectionFromChrCam(chr_cam_address);
     ClearChrCamAcceleration(chr_cam_address);
     if (!g_logged_camera_acceleration_suppression) {

@@ -29,6 +29,7 @@ namespace radial_menu_mod::dx12_hook {
 namespace {
 
 constexpr bool kDisableNativeInputForDiagnosticBuild = false;
+constexpr bool kEnableTimingDiagnostics = false;
 
 // ── per-frame D3D12 resources ─────────────────────────────────────────────
 struct Frame {
@@ -52,6 +53,7 @@ static D3D12_GPU_DESCRIPTOR_HANDLE g_icon_srv_gpu[icon_loader::kMaxAtlases] = {}
 static bool                        g_icon_srv_allocated = false;
 static bool                        g_icons_ready = false;
 static bool                        g_asset_reader_installed = false;
+static bool                        g_gameplay_ready_last_frame = false;
 static bool                        g_logged_icon_vfs_unavailable = false;
 static ULONGLONG                   g_next_icon_init_attempt_ms = 0;
 static int                         g_icon_prewarm_phase = 0;
@@ -98,9 +100,16 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
     return CallWindowProcW(g_old_wndproc, hwnd, msg, w, l);
 }
 
+static ULONGLONG TimingStart()
+{
+    return kEnableTimingDiagnostics ? GetTickCount64() : 0;
+}
+
 static void LogSlowDuration(const char* label, ULONGLONG start_ms, ULONGLONG threshold_ms,
                             ULONGLONG& last_log_ms)
 {
+    if (!kEnableTimingDiagnostics) return;
+
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG elapsed = now - start_ms;
     if (elapsed < threshold_ms) return;
@@ -147,19 +156,20 @@ static bool TryInitializeIcons()
     return false;
 }
 
-static void RefreshRequiredIconAtlasesForSlots(const std::vector<RadialSlot>& slots)
+static bool RefreshRequiredIconAtlasesForSlots(const std::vector<RadialSlot>& slots)
 {
-    if (!g_icons_ready) return;
+    if (!g_icons_ready) return false;
 
-    const ULONGLONG start = GetTickCount64();
+    const ULONGLONG start = TimingStart();
 
     std::vector<std::uint32_t> icon_ids;
     icon_ids.reserve(slots.size());
     for (const RadialSlot& slot : slots) {
         if (slot.icon_id != 0) icon_ids.push_back(slot.icon_id);
     }
-    icon_loader::PreloadIcons(icon_ids, 1);
+    const bool complete = icon_loader::PreloadIcons(icon_ids, 1);
     LogSlowDuration("RefreshRequiredIconAtlasesForOpenSlots", start, 16, g_last_slow_icon_refresh_log_ms);
+    return complete;
 }
 
 static void AddPrewarmSlotIcons(const std::vector<RadialSlot>& slots)
@@ -183,7 +193,7 @@ static void PrewarmRadialIcons()
 {
     if (!g_icons_ready || radial_menu::IsOpen() || g_icon_prewarm_phase >= 3) return;
 
-    const ULONGLONG start = GetTickCount64();
+    const ULONGLONG start = TimingStart();
     if (g_icon_prewarm_phase == 0) {
         AddPrewarmSlotIcons(GetMemorizedSpells());
         g_icon_prewarm_phase = 1;
@@ -230,6 +240,7 @@ static void ReleaseOverlayResources(const char* reason)
 
     WaitForQueueIdle();
     icon_loader::Shutdown();
+    radial_menu::InvalidateDrawCache();
     g_icons_ready = false;
     g_icon_srv_allocated = false;
     g_srv_used = 0;
@@ -267,6 +278,7 @@ static void ReleaseOverlayResources(const char* reason)
     g_next_icon_init_attempt_ms = 0;
     ResetIconPrewarm();
     g_refreshed_open_icon_atlases = false;
+    g_gameplay_ready_last_frame = false;
     g_last_slow_asset_install_log_ms = 0;
     g_last_slow_gameplay_state_log_ms = 0;
     g_last_slow_native_input_log_ms = 0;
@@ -424,7 +436,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
         return g_orig_present(swap_chain, sync, flags);
     }
 
-    ULONGLONG section_start = GetTickCount64();
+    ULONGLONG section_start = TimingStart();
     if (!g_asset_reader_installed) {
         g_asset_reader_installed = asset_reader::Install();
         LogSlowDuration("asset_reader::Install", section_start, 4, g_last_slow_asset_install_log_ms);
@@ -434,12 +446,13 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
         }
     }
 
-    section_start = GetTickCount64();
+    section_start = TimingStart();
     const bool gameplay_ready = gameplay_state::RefreshNormalGameplayHudState();
+    const bool left_gameplay = g_gameplay_ready_last_frame && !gameplay_ready;
     LogSlowDuration("gameplay_state::RefreshNormalGameplayHudState", section_start, 4, g_last_slow_gameplay_state_log_ms);
 
-    if (!kDisableNativeInputForDiagnosticBuild) {
-        section_start = GetTickCount64();
+    if (!kDisableNativeInputForDiagnosticBuild && (gameplay_ready || left_gameplay)) {
+        section_start = TimingStart();
         native_input::SampleFrame();
         LogSlowDuration("native_input::SampleFrame", section_start, 4, g_last_slow_native_input_log_ms);
     }
@@ -447,31 +460,32 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
 
     if (gameplay_ready) {
         if (!g_icons_ready) {
-            section_start = GetTickCount64();
+            section_start = TimingStart();
             TryInitializeIcons();
             LogSlowDuration("TryInitializeIcons", section_start, 16, g_last_slow_icon_init_log_ms);
         }
         if (g_icons_ready && radial_open && !g_refreshed_open_icon_atlases) {
-            RefreshRequiredIconAtlasesForSlots(radial_input::GetOpenRadialSlots());
-            g_refreshed_open_icon_atlases = true;
+            g_refreshed_open_icon_atlases = RefreshRequiredIconAtlasesForSlots(radial_input::GetOpenRadialSlots());
         }
         if (g_icons_ready && !radial_open) {
             g_refreshed_open_icon_atlases = false;
-            PrewarmRadialIcons();
+            if (g_icon_prewarm_phase < 3) PrewarmRadialIcons();
         }
-    } else {
+    } else if (left_gameplay) {
         InvalidateRadialSlotCaches();
         ResetIconPrewarm();
         g_refreshed_open_icon_atlases = false;
     }
 
     if (!radial_open) {
+        g_gameplay_ready_last_frame = gameplay_ready;
         return g_orig_present(swap_chain, sync, flags);
     }
 
-    section_start = GetTickCount64();
+    section_start = TimingStart();
     RenderRadialOverlay(swap_chain);
     LogSlowDuration("RenderRadialOverlay", section_start, 4, g_last_slow_render_log_ms);
+    g_gameplay_ready_last_frame = gameplay_ready;
     return g_orig_present(swap_chain, sync, flags);
 }
 

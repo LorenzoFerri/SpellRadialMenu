@@ -9,6 +9,7 @@ void DrawMenuContents(
     const char* title,
     const char* controls,
     int selected_slot,
-    IconTextureInfo(*icon_texture_resolver)(std::uint32_t icon_id));
+    const std::vector<IconTextureInfo>& icon_textures);
+void InvalidateMenuDrawCache();
 
 }  // namespace radial_menu_mod::radial_menu

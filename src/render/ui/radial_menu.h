@@ -15,6 +15,7 @@ struct IconTextureInfo {
 void SetIconTextureResolver(IconTextureInfo(*resolver)(std::uint32_t icon_id));
 void Open(int initial_selection);
 void Close();
+void InvalidateDrawCache();
 bool IsOpen();
 int GetSelectedSlot();
 void UpdateSelectionFromDirection(float selection_x, float selection_y, std::size_t slot_count);
