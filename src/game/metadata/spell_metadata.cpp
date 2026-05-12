@@ -4,6 +4,8 @@
 #include "game/messages/message_repository.h"
 #include "game/params/param_repository.h"
 
+#include <windows.h>
+
 #include <cstdio>
 #include <mutex>
 #include <unordered_map>
@@ -27,6 +29,21 @@ std::mutex g_cache_mutex;
 std::unordered_map<std::uint32_t, ResolvedSpellMetadata> g_metadata_cache;
 std::uintptr_t g_goods_param_offset = 0;
 bool g_logged_goods_fallback = false;
+ULONGLONG g_last_slow_spell_metadata_log_ms = 0;
+
+void LogSlowSpellMetadata(std::uint32_t spell_id, ULONGLONG start_ms, const ResolvedSpellMetadata& metadata)
+{
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG elapsed = now - start_ms;
+    if (elapsed < 16) return;
+    if (g_last_slow_spell_metadata_log_ms != 0 && now - g_last_slow_spell_metadata_log_ms < 2000) return;
+
+    g_last_slow_spell_metadata_log_ms = now;
+    Log("Timing: ResolveSpellMetadata(%u) took %llums (icon=%u).",
+        spell_id,
+        static_cast<unsigned long long>(elapsed),
+        metadata.icon_id);
+}
 
 std::uintptr_t LocateEquipParamGoodsOffset(std::uintptr_t repo)
 {
@@ -109,6 +126,7 @@ ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id)
         }
     }
 
+    const ULONGLONG start = GetTickCount64();
     const auto runtime = ReadRuntimeMagicMetadata(spell_id);
     std::string name = message_repository::LookupMagicName(spell_id);
     if (name.empty()) {
@@ -123,8 +141,11 @@ ResolvedSpellMetadata ResolveSpellMetadata(std::uint32_t spell_id)
         .category = runtime.category,
     };
 
-    std::lock_guard lock(g_cache_mutex);
-    g_metadata_cache[spell_id] = metadata;
+    {
+        std::lock_guard lock(g_cache_mutex);
+        g_metadata_cache[spell_id] = metadata;
+    }
+    LogSlowSpellMetadata(spell_id, start, metadata);
 
     return metadata;
 }

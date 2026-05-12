@@ -4,6 +4,8 @@
 #include "game/state/gameplay_state.h"
 #include "render/ui/radial_menu.h"
 
+#include <windows.h>
+
 namespace radial_menu_mod::radial_input {
 namespace {
 
@@ -22,6 +24,18 @@ struct RadialHoldState {
 RadialHoldState g_hold = {};
 std::vector<RadialSlot> g_open_radial_slots;
 RadialKind g_open_kind = RadialKind::none;
+ULONGLONG g_last_slow_open_slots_log_ms = 0;
+
+void LogSlowOpenDuration(const char* label, ULONGLONG start_ms)
+{
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG elapsed = now - start_ms;
+    if (elapsed < 16) return;
+    if (g_last_slow_open_slots_log_ms != 0 && now - g_last_slow_open_slots_log_ms < 2000) return;
+
+    g_last_slow_open_slots_log_ms = now;
+    Log("Timing: %s took %llums.", label, static_cast<unsigned long long>(elapsed));
+}
 
 bool CanStartRadialInput(RadialKind kind)
 {
@@ -53,7 +67,9 @@ void BeginRadialHold(RadialHoldState& hold, RadialKind kind)
 
 void LoadOpenRadialSlots(RadialKind kind)
 {
+    const ULONGLONG start = GetTickCount64();
     g_open_radial_slots = kind == RadialKind::items ? GetQuickItems() : GetMemorizedSpells();
+    LogSlowOpenDuration(kind == RadialKind::items ? "LoadOpenRadialSlots(items)" : "LoadOpenRadialSlots(spells)", start);
 }
 
 int CurrentSelectionFor(RadialKind kind)

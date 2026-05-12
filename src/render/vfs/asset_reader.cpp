@@ -40,9 +40,10 @@ std::mutex g_cache_mutex;
 std::unordered_map<void*, std::wstring> g_pending_reads;
 std::unordered_map<std::wstring, std::vector<std::uint8_t>> g_cached_files;
 std::vector<VirtualRootPath> g_virtual_roots;
-bool g_logged_virtual_roots = false;
+std::size_t g_virtual_root_slot_count = 0;
 bool g_logged_virtual_mounts = false;
 bool g_logged_memory_root_read = false;
+bool g_logged_system_root_read = false;
 bool g_logged_memory_root_miss = false;
 bool g_logged_loader_filesystem_read = false;
 bool g_logged_loader_filesystem_miss = false;
@@ -91,10 +92,13 @@ bool ReadThroughLoaderFilesystem(const wchar_t* path, std::vector<std::uint8_t>&
 
 void CaptureVirtualRoots(const DlDeviceManager2015& manager)
 {
-    if (!g_virtual_roots.empty()) return;
     const std::size_t count = VectorLen(manager.virtual_roots);
+    if (count <= g_virtual_root_slot_count) return;
     if (count == 0 || !IsReadableMemory(manager.virtual_roots.first, count * sizeof(DlVirtualRoot))) return;
 
+    g_virtual_root_slot_count = count;
+    g_virtual_roots.clear();
+    g_virtual_roots.reserve(count);
     for (const DlVirtualRoot* it = manager.virtual_roots.first; it != manager.virtual_roots.last; ++it) {
         std::wstring root = NormalizePath(ReadDlString(it->root).c_str());
         std::wstring expanded = ReadDlString(it->expanded);
@@ -102,8 +106,14 @@ void CaptureVirtualRoots(const DlDeviceManager2015& manager)
         g_virtual_roots.push_back({std::move(root), std::move(expanded)});
     }
 
-    g_logged_virtual_roots = true;
     Log("Asset reader: captured %zu game VFS virtual roots.", g_virtual_roots.size());
+}
+
+void RefreshVirtualRoots()
+{
+    DlDeviceManager2015* manager = LocateDeviceManager();
+    if (!manager) return;
+    CaptureVirtualRoots(*manager);
 }
 
 void LogVirtualMounts(const char* label, const DlVector2015<DlVirtualMount>& mounts)
@@ -136,6 +146,24 @@ bool ReadFromMemoryVirtualRoot(const wchar_t* path, std::vector<std::uint8_t>& b
     }
 
     if (!g_virtual_roots.empty()) g_logged_memory_root_miss = true;
+    return false;
+}
+
+bool ReadFromMemorySystemRoot(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64_t max_size)
+{
+    std::wstring relative;
+    if (!Data0IconPathToRelativePath(path, relative)) return false;
+
+    for (const VirtualRootPath& root : g_virtual_roots) {
+        if (root.root != L"system") continue;
+
+        const std::wstring disk_path = JoinDiskPath(root.expanded, relative);
+        if (ReadDiskFile(disk_path, bytes, max_size)) {
+            if (!g_logged_system_root_read) Log("Asset reader: icon asset resolved through game system root mapping.");
+            g_logged_system_root_read = true;
+            return true;
+        }
+    }
     return false;
 }
 
@@ -361,7 +389,9 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
     bytes.clear();
     if (!path) return false;
     if (TryGetCachedFile(path, bytes)) return true;
+    RefreshVirtualRoots();
     if (ReadFromMemoryVirtualRoot(path, bytes, max_size)) return true;
+    if (ReadFromMemorySystemRoot(path, bytes, max_size)) return true;
     if (ReadThroughLoaderFilesystem(path, bytes, max_size)) return true;
     if (ReadFileFromMountedVfs(path, bytes, max_size)) return true;
     if (!AllowsDirectRead(path)) return false;
@@ -439,11 +469,13 @@ void Shutdown()
     g_captured_temp_flag = false;
     g_logged_waiting_for_cache = false;
     g_logged_memory_root_read = false;
+    g_logged_system_root_read = false;
     g_logged_memory_root_miss = false;
     std::lock_guard lock(g_cache_mutex);
     g_pending_reads.clear();
     g_cached_files.clear();
     g_virtual_roots.clear();
+    g_virtual_root_slot_count = 0;
 }
 
 }  // namespace radial_menu_mod::asset_reader

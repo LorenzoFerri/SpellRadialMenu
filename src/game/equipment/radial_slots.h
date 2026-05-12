@@ -22,6 +22,7 @@ struct RadialSlot {
 };
 
 bool InitializeRadialSlots();
+void InvalidateRadialSlotCaches();
 int GetCurrentSpellSlot();
 std::vector<RadialSlot> GetMemorizedSpells();
 bool SwitchToSpellSlot(std::size_t slot_index);

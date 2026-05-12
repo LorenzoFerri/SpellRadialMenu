@@ -31,6 +31,7 @@ constexpr std::int32_t kSwitchItem2Input = 25;
 constexpr std::int32_t kSwitchSpellAction = 13;
 constexpr std::int32_t kSwitchItemAction = 14;
 constexpr DWORD kRadialHoldThresholdMs = 220;
+constexpr DWORD kNativeActionReleaseGraceMs = 120;
 
 struct EquipmentChangeSoundEvent {
     std::int32_t event_id = 0x2710;
@@ -46,6 +47,7 @@ struct CaptureState {
     bool radial_started = false;
     bool tap_feedback_pending = false;
     ULONGLONG pressed_ms = 0;
+    ULONGLONG last_seen_ms = 0;
 };
 
 using EquipmentHudUpdateFn = void (*)(void* hud_context, void* arg2, void* arg3);
@@ -111,11 +113,13 @@ bool WriteGameMemory(std::uintptr_t address, const T& value)
 
 void BeginCapture(CaptureState& capture)
 {
+    const auto now = GetTickCount64();
+    capture.last_seen_ms = now;
     if (capture.input_down) return;
     capture.input_down = true;
     capture.capture_active = true;
     capture.radial_started = false;
-    capture.pressed_ms = GetTickCount64();
+    capture.pressed_ms = now;
 }
 
 void ResetCapture(CaptureState& capture)
@@ -124,6 +128,12 @@ void ResetCapture(CaptureState& capture)
     capture.capture_active = false;
     capture.radial_started = false;
     capture.pressed_ms = 0;
+    capture.last_seen_ms = 0;
+}
+
+bool IsNativeActionStillDown(const CaptureState& capture, ULONGLONG now)
+{
+    return capture.input_down && capture.last_seen_ms != 0 && now - capture.last_seen_ms <= kNativeActionReleaseGraceMs;
 }
 
 bool IsSwitchSpell2Present()
@@ -141,27 +151,27 @@ bool IsRadialActiveNow()
     return g_spell_capture.radial_started || g_item_capture.radial_started || radial_menu::IsOpen();
 }
 
-bool IsCaptureActive(CaptureState& capture, bool (*is_input_present)())
+bool IsCaptureActive(const CaptureState& capture)
 {
     if (!gameplay_state::GetCachedNormalGameplayHudState()) return false;
-    if (capture.capture_active) return true;
-    if (!is_input_present()) return false;
-
-    BeginCapture(capture);
-    return true;
+    return capture.capture_active;
 }
 
 bool ShouldSuppressSpellSwitch(void* equip_magic_data)
 {
+    if (!IsCaptureActive(g_spell_capture)) return false;
+
     const auto current_equip_magic_data = equip_access::ResolveEquipMagicData();
-    return IsCaptureActive(g_spell_capture, &IsSwitchSpell2Present) && current_equip_magic_data != 0 &&
+    return current_equip_magic_data != 0 &&
         reinterpret_cast<std::uintptr_t>(equip_magic_data) == current_equip_magic_data;
 }
 
 bool ShouldSuppressItemSwitch(void* equip_item_data)
 {
+    if (!IsCaptureActive(g_item_capture)) return false;
+
     const auto current_equip_item_data = equip_access::ResolveEquipItemData();
-    return IsCaptureActive(g_item_capture, &IsSwitchItem2Present) && current_equip_item_data != 0 &&
+    return current_equip_item_data != 0 &&
         reinterpret_cast<std::uintptr_t>(equip_item_data) == current_equip_item_data;
 }
 
@@ -201,8 +211,8 @@ bool HookedSwitchSpellRequestCheck(void* input_state)
 {
     const bool requested = g_original_switch_spell_request_check != nullptr ?
         g_original_switch_spell_request_check(input_state) : false;
-    if (requested || IsCaptureActive(g_spell_capture, &IsSwitchSpell2Present)) {
-        if (requested) BeginCapture(g_spell_capture);
+    if (requested) BeginCapture(g_spell_capture);
+    if (requested || IsCaptureActive(g_spell_capture)) {
         if (!g_logged_switch_spell_request_suppression) {
             g_logged_switch_spell_request_suppression = true;
             Log("Suppressed SwitchSpell request check for radial capture.");
@@ -217,8 +227,8 @@ bool HookedSwitchItemRequestCheck(void* input_state)
 {
     const bool requested = g_original_switch_item_request_check != nullptr ?
         g_original_switch_item_request_check(input_state) : false;
-    if (requested || IsCaptureActive(g_item_capture, &IsSwitchItem2Present)) {
-        if (requested) BeginCapture(g_item_capture);
+    if (requested) BeginCapture(g_item_capture);
+    if (requested || IsCaptureActive(g_item_capture)) {
         if (!g_logged_switch_item_request_suppression) {
             g_logged_switch_item_request_suppression = true;
             Log("Suppressed SwitchItem request check for radial capture.");
@@ -238,8 +248,8 @@ bool HookedSwitchHoldCheck(void* input_state, std::int32_t action)
     const bool requested = g_original_switch_hold_check != nullptr ?
         g_original_switch_hold_check(input_state, action) : false;
 
-    if (action == kSwitchSpellAction && (requested || IsCaptureActive(g_spell_capture, &IsSwitchSpell2Present))) {
-        if (requested) BeginCapture(g_spell_capture);
+    if (action == kSwitchSpellAction && requested) BeginCapture(g_spell_capture);
+    if (action == kSwitchSpellAction && (requested || IsCaptureActive(g_spell_capture))) {
         if (!g_logged_switch_spell_hold_suppression) {
             g_logged_switch_spell_hold_suppression = true;
             Log("Suppressed SwitchSpell hold check for radial capture.");
@@ -247,8 +257,8 @@ bool HookedSwitchHoldCheck(void* input_state, std::int32_t action)
         return false;
     }
 
-    if (action == kSwitchItemAction && (requested || IsCaptureActive(g_item_capture, &IsSwitchItem2Present))) {
-        if (requested) BeginCapture(g_item_capture);
+    if (action == kSwitchItemAction && requested) BeginCapture(g_item_capture);
+    if (action == kSwitchItemAction && (requested || IsCaptureActive(g_item_capture))) {
         if (!g_logged_switch_item_hold_suppression) {
             g_logged_switch_item_hold_suppression = true;
             Log("Suppressed SwitchItem hold check for radial capture.");
@@ -263,8 +273,8 @@ bool HookedSwitchSpellRepeatCheck(void* input_state)
 {
     const bool requested = g_original_switch_spell_repeat_check != nullptr ?
         g_original_switch_spell_repeat_check(input_state) : false;
-    if (requested || IsCaptureActive(g_spell_capture, &IsSwitchSpell2Present)) {
-        if (requested) BeginCapture(g_spell_capture);
+    if (requested) BeginCapture(g_spell_capture);
+    if (requested || IsCaptureActive(g_spell_capture)) {
         if (!g_logged_switch_spell_repeat_suppression) {
             g_logged_switch_spell_repeat_suppression = true;
             Log("Suppressed SwitchSpell repeat check for radial capture.");
@@ -279,8 +289,8 @@ bool HookedSwitchItemRepeatCheck(void* input_state)
 {
     const bool requested = g_original_switch_item_repeat_check != nullptr ?
         g_original_switch_item_repeat_check(input_state) : false;
-    if (requested || IsCaptureActive(g_item_capture, &IsSwitchItem2Present)) {
-        if (requested) BeginCapture(g_item_capture);
+    if (requested) BeginCapture(g_item_capture);
+    if (requested || IsCaptureActive(g_item_capture)) {
         if (!g_logged_switch_item_repeat_suppression) {
             g_logged_switch_item_repeat_suppression = true;
             Log("Suppressed SwitchItem repeat check for radial capture.");
@@ -364,8 +374,8 @@ void PassThroughShortSwitchItemTap()
 
 void UpdateSpellRadialState(float selection_x, float selection_y)
 {
-    const bool is_down = IsSwitchSpell2Present();
     const auto now = GetTickCount64();
+    const bool is_down = IsNativeActionStillDown(g_spell_capture, now) || IsSwitchSpell2Present();
 
     if (is_down) {
         if (!g_spell_capture.input_down) BeginCapture(g_spell_capture);
@@ -394,8 +404,8 @@ void UpdateSpellRadialState(float selection_x, float selection_y)
 
 void UpdateItemRadialState(float selection_x, float selection_y)
 {
-    const bool is_down = IsSwitchItem2Present();
     const auto now = GetTickCount64();
+    const bool is_down = IsNativeActionStillDown(g_item_capture, now) || IsSwitchItem2Present();
 
     if (is_down) {
         if (!g_item_capture.input_down) BeginCapture(g_item_capture);

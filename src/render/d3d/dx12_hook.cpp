@@ -1,5 +1,6 @@
 #include "render/d3d/dx12_hook.h"
 #include "core/common.h"
+#include "game/equipment/radial_slots.h"
 #include "game/input/native_input.h"
 #include "game/state/gameplay_state.h"
 #include "input/radial_input.h"
@@ -17,12 +18,17 @@
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cstddef>
+#include <vector>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 namespace radial_menu_mod::dx12_hook {
 namespace {
+
+constexpr bool kDisableNativeInputForDiagnosticBuild = false;
 
 // ── per-frame D3D12 resources ─────────────────────────────────────────────
 struct Frame {
@@ -46,6 +52,17 @@ static D3D12_GPU_DESCRIPTOR_HANDLE g_icon_srv_gpu[icon_loader::kMaxAtlases] = {}
 static bool                        g_icon_srv_allocated = false;
 static bool                        g_icons_ready = false;
 static bool                        g_logged_icon_vfs_unavailable = false;
+static ULONGLONG                   g_next_icon_init_attempt_ms = 0;
+static int                         g_icon_prewarm_phase = 0;
+static bool                        g_logged_icon_prewarm_complete = false;
+static std::vector<std::uint32_t>  g_icon_prewarm_ids;
+static ULONGLONG                   g_last_slow_asset_install_log_ms = 0;
+static ULONGLONG                   g_last_slow_gameplay_state_log_ms = 0;
+static ULONGLONG                   g_last_slow_native_input_log_ms = 0;
+static ULONGLONG                   g_last_slow_icon_init_log_ms = 0;
+static ULONGLONG                   g_last_slow_icon_refresh_log_ms = 0;
+static ULONGLONG                   g_last_slow_icon_prewarm_log_ms = 0;
+static ULONGLONG                   g_last_slow_render_log_ms = 0;
 
 static HWND    g_hwnd        = nullptr;
 static WNDPROC g_old_wndproc = nullptr;
@@ -69,10 +86,26 @@ static void* g_hook_resize_buffers1 = nullptr;
 static void* g_hook_set_fullscreen_state = nullptr;
 static void* g_hook_ecl     = nullptr;
 
+static IDXGISwapChain* g_last_fullscreen_swap_chain = nullptr;
+static BOOL g_last_fullscreen_request = FALSE;
+static bool g_has_last_fullscreen_request = false;
+
 static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
 {
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
     return CallWindowProcW(g_old_wndproc, hwnd, msg, w, l);
+}
+
+static void LogSlowDuration(const char* label, ULONGLONG start_ms, ULONGLONG threshold_ms,
+                            ULONGLONG& last_log_ms)
+{
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG elapsed = now - start_ms;
+    if (elapsed < threshold_ms) return;
+    if (last_log_ms != 0 && now - last_log_ms < 2000) return;
+
+    last_log_ms = now;
+    Log("Timing: %s took %llums.", label, static_cast<unsigned long long>(elapsed));
 }
 
 // ── SRV bump allocator ────────────────────────────────────────────────────
@@ -92,6 +125,9 @@ static bool TryInitializeIcons()
 {
     if (g_icons_ready) return true;
 
+    const ULONGLONG now = GetTickCount64();
+    if (g_next_icon_init_attempt_ms != 0 && now < g_next_icon_init_attempt_ms) return false;
+
     if (!g_icon_srv_allocated) {
         for (std::size_t i = 0; i < icon_loader::kMaxAtlases; ++i) {
             SrvAlloc(nullptr, &g_icon_srv_cpu[i], &g_icon_srv_gpu[i]);
@@ -105,7 +141,61 @@ static bool TryInitializeIcons()
         Log("Icon loader initialized.");
         return true;
     }
+    g_next_icon_init_attempt_ms = now + 1000;
     return false;
+}
+
+static void RefreshRequiredIconAtlasesForSlots(const std::vector<RadialSlot>& slots)
+{
+    if (!g_icons_ready) return;
+
+    const ULONGLONG start = GetTickCount64();
+
+    std::vector<std::uint32_t> icon_ids;
+    icon_ids.reserve(slots.size());
+    for (const RadialSlot& slot : slots) {
+        if (slot.icon_id != 0) icon_ids.push_back(slot.icon_id);
+    }
+    icon_loader::PreloadIcons(icon_ids, 1);
+    LogSlowDuration("RefreshRequiredIconAtlasesForOpenSlots", start, 16, g_last_slow_icon_refresh_log_ms);
+}
+
+static void AddPrewarmSlotIcons(const std::vector<RadialSlot>& slots)
+{
+    for (const RadialSlot& slot : slots) {
+        if (slot.icon_id == 0) continue;
+        if (std::find(g_icon_prewarm_ids.begin(), g_icon_prewarm_ids.end(), slot.icon_id) == g_icon_prewarm_ids.end()) {
+            g_icon_prewarm_ids.push_back(slot.icon_id);
+        }
+    }
+}
+
+static void ResetIconPrewarm()
+{
+    g_icon_prewarm_phase = 0;
+    g_logged_icon_prewarm_complete = false;
+    g_icon_prewarm_ids.clear();
+}
+
+static void PrewarmRadialIcons()
+{
+    if (!g_icons_ready || radial_menu::IsOpen() || g_icon_prewarm_phase >= 3) return;
+
+    const ULONGLONG start = GetTickCount64();
+    if (g_icon_prewarm_phase == 0) {
+        AddPrewarmSlotIcons(GetMemorizedSpells());
+        g_icon_prewarm_phase = 1;
+    } else if (g_icon_prewarm_phase == 1) {
+        AddPrewarmSlotIcons(GetQuickItems());
+        g_icon_prewarm_phase = 2;
+    } else if (icon_loader::PreloadIcons(g_icon_prewarm_ids, 1)) {
+        g_icon_prewarm_phase = 3;
+        if (!g_logged_icon_prewarm_complete) {
+            Log("Icon loader radial prewarm complete (icons=%zu).", g_icon_prewarm_ids.size());
+            g_logged_icon_prewarm_complete = true;
+        }
+    }
+    LogSlowDuration("PrewarmRadialIcons", start, 16, g_last_slow_icon_prewarm_log_ms);
 }
 
 static void WaitForQueueIdle()
@@ -172,6 +262,17 @@ static void ReleaseOverlayResources(const char* reason)
     g_ready = false;
     g_buf_count = 0;
     g_rtv_stride = 0;
+    g_next_icon_init_attempt_ms = 0;
+    ResetIconPrewarm();
+    g_last_slow_asset_install_log_ms = 0;
+    g_last_slow_gameplay_state_log_ms = 0;
+    g_last_slow_native_input_log_ms = 0;
+    g_last_slow_icon_init_log_ms = 0;
+    g_last_slow_icon_refresh_log_ms = 0;
+    g_last_slow_icon_prewarm_log_ms = 0;
+    g_last_slow_render_log_ms = 0;
+    g_last_fullscreen_swap_chain = nullptr;
+    g_has_last_fullscreen_request = false;
     g_hwnd = nullptr;
     g_old_wndproc = nullptr;
     Log("Overlay resources released for %s.", reason);
@@ -320,22 +421,49 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
         return g_orig_present(swap_chain, sync, flags);
     }
 
-    if (!asset_reader::Install() && !g_logged_icon_vfs_unavailable) {
+    ULONGLONG section_start = GetTickCount64();
+    const bool asset_reader_installed = asset_reader::Install();
+    LogSlowDuration("asset_reader::Install", section_start, 4, g_last_slow_asset_install_log_ms);
+    if (!asset_reader_installed && !g_logged_icon_vfs_unavailable) {
         Log("Icon loader: game VFS hook unavailable; icon archives cannot be read from game memory.");
         g_logged_icon_vfs_unavailable = true;
     }
 
+    section_start = GetTickCount64();
     const bool gameplay_ready = gameplay_state::RefreshNormalGameplayHudState();
-    native_input::SampleFrame();
+    LogSlowDuration("gameplay_state::RefreshNormalGameplayHudState", section_start, 4, g_last_slow_gameplay_state_log_ms);
 
-    if (!radial_menu::IsOpen()) {
-        if (!g_icons_ready && gameplay_ready) {
+    if (!kDisableNativeInputForDiagnosticBuild) {
+        section_start = GetTickCount64();
+        native_input::SampleFrame();
+        LogSlowDuration("native_input::SampleFrame", section_start, 4, g_last_slow_native_input_log_ms);
+    }
+    const bool radial_open = radial_menu::IsOpen();
+
+    if (gameplay_ready) {
+        if (!g_icons_ready) {
+            section_start = GetTickCount64();
             TryInitializeIcons();
+            LogSlowDuration("TryInitializeIcons", section_start, 16, g_last_slow_icon_init_log_ms);
         }
+        if (g_icons_ready && radial_open) {
+            RefreshRequiredIconAtlasesForSlots(radial_input::GetOpenRadialSlots());
+        }
+        if (g_icons_ready && !radial_open) {
+            PrewarmRadialIcons();
+        }
+    } else {
+        InvalidateRadialSlotCaches();
+        ResetIconPrewarm();
+    }
+
+    if (!radial_open) {
         return g_orig_present(swap_chain, sync, flags);
     }
 
+    section_start = GetTickCount64();
     RenderRadialOverlay(swap_chain);
+    LogSlowDuration("RenderRadialOverlay", section_start, 4, g_last_slow_render_log_ms);
     return g_orig_present(swap_chain, sync, flags);
 }
 
@@ -363,11 +491,16 @@ static HRESULT STDMETHODCALLTYPE HookedSetFullscreenState(IDXGISwapChain* swap_c
     BOOL current_fullscreen = FALSE;
     const HRESULT state_result = swap_chain->GetFullscreenState(&current_fullscreen, nullptr);
     const bool state_changed = FAILED(state_result) || current_fullscreen != fullscreen;
+    const bool repeated_request = g_has_last_fullscreen_request &&
+        g_last_fullscreen_swap_chain == swap_chain && g_last_fullscreen_request == fullscreen;
 
-    if (state_changed) {
+    if (state_changed && !repeated_request) {
         Log("SetFullscreenState detected (fullscreen=%d).", fullscreen ? 1 : 0);
         ReleaseOverlayResources("fullscreen transition");
     }
+    g_last_fullscreen_swap_chain = swap_chain;
+    g_last_fullscreen_request = fullscreen;
+    g_has_last_fullscreen_request = true;
     return g_orig_set_fullscreen_state(swap_chain, fullscreen, target);
 }
 

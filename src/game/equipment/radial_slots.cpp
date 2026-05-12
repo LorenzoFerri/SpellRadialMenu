@@ -3,6 +3,8 @@
 #include "core/common.h"
 #include "game/equipment/equip_access.h"
 
+#include <windows.h>
+
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -16,6 +18,23 @@ using namespace equip_access;
 bool g_logged_no_equip_data = false;
 std::vector<std::uint32_t> g_last_spell_log_signature;
 std::vector<std::uint32_t> g_last_item_log_signature;
+std::vector<RadialSlot> g_cached_spells;
+std::vector<RadialSlot> g_cached_quick_items;
+bool g_cached_spells_valid = false;
+bool g_cached_quick_items_valid = false;
+ULONGLONG g_last_slow_spell_slots_log_ms = 0;
+ULONGLONG g_last_slow_item_slots_log_ms = 0;
+
+void LogSlowSlotDuration(const char* label, ULONGLONG start_ms, ULONGLONG& last_log_ms)
+{
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG elapsed = now - start_ms;
+    if (elapsed < 16) return;
+    if (last_log_ms != 0 && now - last_log_ms < 2000) return;
+
+    last_log_ms = now;
+    Log("Timing: %s took %llums.", label, static_cast<unsigned long long>(elapsed));
+}
 
 void LogSlotSummaryIfChanged(const char* label, const std::vector<RadialSlot>& slots, std::vector<std::uint32_t>& last_signature)
 {
@@ -41,6 +60,21 @@ void LogSlotSummaryIfChanged(const char* label, const std::vector<RadialSlot>& s
     Log("%s radial entries changed (count=%zu ids_icons=[%s]).", label, slots.size(), summary.c_str());
 }
 
+void UpdateCurrentFlags(std::vector<RadialSlot>& slots, std::size_t current_slot)
+{
+    for (RadialSlot& slot : slots) {
+        slot.is_current = slot.slot_index == current_slot;
+    }
+}
+
+int DisplayIndexForSlot(const std::vector<RadialSlot>& slots, std::size_t current_slot)
+{
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+        if (slots[i].slot_index == current_slot) return static_cast<int>(i);
+    }
+    return -1;
+}
+
 }  // namespace
 
 bool InitializeRadialSlots()
@@ -55,6 +89,14 @@ bool InitializeRadialSlots()
     return true;
 }
 
+void InvalidateRadialSlotCaches()
+{
+    g_cached_spells.clear();
+    g_cached_quick_items.clear();
+    g_cached_spells_valid = false;
+    g_cached_quick_items_valid = false;
+}
+
 int GetCurrentSpellSlot()
 {
     const auto equip_magic_data = ResolveEquipMagicData();
@@ -62,10 +104,14 @@ int GetCurrentSpellSlot()
     const int entry_slot = ResolveCurrentSpellEntrySlot(equip_magic_data);
     if (entry_slot < 0) return -1;
 
+    if (g_cached_spells_valid) return DisplayIndexForSlot(g_cached_spells, static_cast<std::size_t>(entry_slot));
+
+    const auto spell_slots = equip_magic_data + kFirstMagicSlotOffset;
+    if (!IsReadableMemory(reinterpret_cast<const void*>(spell_slots), kMaxSpellSlots * kSpellEntryStride)) return -1;
+
     int display = 0;
     for (std::size_t i = 0; i < kMaxSpellSlots; ++i) {
-        std::uint32_t spell_id = 0;
-        if (!ReadMemory(equip_magic_data + kFirstMagicSlotOffset + i * kSpellEntryStride + kSpellIdOffset, spell_id)) continue;
+        const auto spell_id = *reinterpret_cast<const std::uint32_t*>(spell_slots + i * kSpellEntryStride + kSpellIdOffset);
         if (spell_id == 0 || spell_id == 0xFFFFFFFFu) continue;
         if (static_cast<int>(i) == entry_slot) return display;
         ++display;
@@ -75,6 +121,7 @@ int GetCurrentSpellSlot()
 
 std::vector<RadialSlot> GetMemorizedSpells()
 {
+    const ULONGLONG start = GetTickCount64();
     std::vector<RadialSlot> spells;
     const auto equip_magic_data = ResolveEquipMagicData();
     if (!equip_magic_data) {
@@ -82,14 +129,26 @@ std::vector<RadialSlot> GetMemorizedSpells()
             Log("EquipMagicData unresolved; radial menu will be empty.");
             g_logged_no_equip_data = true;
         }
+        LogSlowSlotDuration("GetMemorizedSpells", start, g_last_slow_spell_slots_log_ms);
         return spells;
     }
     g_logged_no_equip_data = false;
 
     const int current_entry = ResolveCurrentSpellEntrySlot(equip_magic_data);
+    if (g_cached_spells_valid) {
+        spells = g_cached_spells;
+        if (current_entry >= 0) UpdateCurrentFlags(spells, static_cast<std::size_t>(current_entry));
+        LogSlowSlotDuration("GetMemorizedSpells", start, g_last_slow_spell_slots_log_ms);
+        return spells;
+    }
+
+    const auto spell_slots = equip_magic_data + kFirstMagicSlotOffset;
+    if (!IsReadableMemory(reinterpret_cast<const void*>(spell_slots), kMaxSpellSlots * kSpellEntryStride)) {
+        LogSlowSlotDuration("GetMemorizedSpells", start, g_last_slow_spell_slots_log_ms);
+        return spells;
+    }
     for (std::size_t i = 0; i < kMaxSpellSlots; ++i) {
-        std::uint32_t spell_id = 0;
-        if (!ReadMemory(equip_magic_data + kFirstMagicSlotOffset + i * kSpellEntryStride + kSpellIdOffset, spell_id)) continue;
+        const auto spell_id = *reinterpret_cast<const std::uint32_t*>(spell_slots + i * kSpellEntryStride + kSpellIdOffset);
         if (spell_id == 0 || spell_id == 0xFFFFFFFFu) continue;
         const auto meta = ResolveSpellMetadata(spell_id);
         spells.push_back({
@@ -104,6 +163,9 @@ std::vector<RadialSlot> GetMemorizedSpells()
         });
     }
     LogSlotSummaryIfChanged("Spell", spells, g_last_spell_log_signature);
+    g_cached_spells = spells;
+    g_cached_spells_valid = true;
+    LogSlowSlotDuration("GetMemorizedSpells", start, g_last_slow_spell_slots_log_ms);
     return spells;
 }
 
@@ -135,15 +197,20 @@ int GetCurrentQuickItemSlot()
 {
     const auto equip_item_data = ResolveEquipItemData();
     if (!equip_item_data) return -1;
+    QuickItemInventorySnapshot quick_items{};
+    if (!ReadQuickItemInventorySnapshot(equip_item_data, quick_items)) return -1;
+
     std::int32_t slot = -1;
     if (!ReadMemory(equip_item_data + kSelectedQuickItemSlotOffset, slot)) return -1;
     if (slot < 0 || slot >= static_cast<int>(kMaxQuickItemSlots)) return -1;
 
-    if (!ReadQuickItemId(equip_item_data, static_cast<std::size_t>(slot))) return -1;
+    if (g_cached_quick_items_valid) return DisplayIndexForSlot(g_cached_quick_items, static_cast<std::size_t>(slot));
+
+    if (!ReadQuickItemId(quick_items, static_cast<std::size_t>(slot))) return -1;
 
     int display = 0;
     for (std::size_t i = 0; i < kMaxQuickItemSlots; ++i) {
-        if (!ReadQuickItemId(equip_item_data, i)) continue;
+        if (!ReadQuickItemId(quick_items, i)) continue;
         if (static_cast<int>(i) == slot) return display;
         ++display;
     }
@@ -152,14 +219,30 @@ int GetCurrentQuickItemSlot()
 
 std::vector<RadialSlot> GetQuickItems()
 {
+    const ULONGLONG start = GetTickCount64();
     std::vector<RadialSlot> items;
     const auto equip_item_data = ResolveEquipItemData();
-    if (!equip_item_data) return items;
+    if (!equip_item_data) {
+        LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
+        return items;
+    }
+    QuickItemInventorySnapshot quick_items{};
+    if (!ReadQuickItemInventorySnapshot(equip_item_data, quick_items)) {
+        LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
+        return items;
+    }
 
     std::int32_t current_slot = -1;
     ReadMemory(equip_item_data + kSelectedQuickItemSlotOffset, current_slot);
+    if (g_cached_quick_items_valid) {
+        items = g_cached_quick_items;
+        if (current_slot >= 0) UpdateCurrentFlags(items, static_cast<std::size_t>(current_slot));
+        LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
+        return items;
+    }
+
     for (std::size_t i = 0; i < kMaxQuickItemSlots; ++i) {
-        const auto item_id = ReadQuickItemId(equip_item_data, i);
+        const auto item_id = ReadQuickItemId(quick_items, i);
         if (!item_id) continue;
 
         const auto meta = ResolveItemMetadata(item_id);
@@ -175,6 +258,9 @@ std::vector<RadialSlot> GetQuickItems()
         });
     }
     LogSlotSummaryIfChanged("Quick item", items, g_last_item_log_signature);
+    g_cached_quick_items = items;
+    g_cached_quick_items_valid = true;
+    LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
     return items;
 }
 

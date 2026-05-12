@@ -29,6 +29,7 @@ struct Atlas {
     D3D12_GPU_DESCRIPTOR_HANDLE gpu_srv{};
     float width = 1.0f;
     float height = 1.0f;
+    bool upload_failed = false;
 };
 
 struct IconSource {
@@ -36,6 +37,7 @@ struct IconSource {
 
     const char* label = "";
     std::unordered_map<std::uint32_t, IconEntry> icons;
+    std::vector<std::uint8_t> tpf;
     bool saw_assets = false;
     bool uploaded_any = false;
     std::size_t uploaded_count = 0;
@@ -47,12 +49,24 @@ std::array<Atlas, kMaxAtlases> g_atlases = {};
 std::size_t g_atlas_count = 0;
 IconSource g_hi_source{"hi"};
 IconSource g_low_source{"low"};
+ID3D12Device* g_device = nullptr;
+ID3D12CommandQueue* g_queue = nullptr;
+std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxAtlases> g_cpu_srvs = {};
+std::array<D3D12_GPU_DESCRIPTOR_HANDLE, kMaxAtlases> g_gpu_srvs = {};
+std::size_t g_srv_count = 0;
 bool g_initialized = false;
 bool g_failed = false;
 bool g_logged_begin = false;
 bool g_logged_missing_assets = false;
 bool g_logged_waiting_for_vfs_context = false;
 std::unordered_set<std::uint32_t> g_logged_missing_icon_ids;
+std::vector<std::size_t> g_required_atlases;
+bool g_logged_hi_read_result = false;
+bool g_logged_low_read_result = false;
+bool g_last_hi_tpf_read = false;
+bool g_last_hi_layout_read = false;
+bool g_last_low_tpf_read = false;
+bool g_last_low_layout_read = false;
 
 void ResetLoadedIconState()
 {
@@ -63,20 +77,24 @@ void ResetLoadedIconState()
         atlas.gpu_srv = {};
         atlas.width = 1.0f;
         atlas.height = 1.0f;
+        atlas.upload_failed = false;
     }
     g_hi_source.icons.clear();
+    g_hi_source.tpf.clear();
     g_hi_source.saw_assets = false;
     g_hi_source.uploaded_any = false;
     g_hi_source.uploaded_count = 0;
     g_hi_source.missing_texture_count = 0;
     g_hi_source.upload_failure_count = 0;
     g_low_source.icons.clear();
+    g_low_source.tpf.clear();
     g_low_source.saw_assets = false;
     g_low_source.uploaded_any = false;
     g_low_source.uploaded_count = 0;
     g_low_source.missing_texture_count = 0;
     g_low_source.upload_failure_count = 0;
     g_atlas_count = 0;
+    g_required_atlases.clear();
 }
 
 std::size_t FindOrAddAtlas(const char* source, std::string name)
@@ -107,20 +125,6 @@ std::vector<std::size_t> AddLayoutIcons(IconSource& source, const std::vector<ic
     return referenced_atlases;
 }
 
-void LogLoadedAtlases()
-{
-    for (std::size_t i = 0; i < g_atlas_count; ++i) {
-        const Atlas& atlas = g_atlases[i];
-        Log("Icon loader atlas[%zu]: source=%s name='%s' uploaded=%d size=%.0fx%.0f.",
-            i,
-            atlas.source,
-            atlas.name.c_str(),
-            static_cast<int>(atlas.gpu_srv.ptr != 0),
-            atlas.width,
-            atlas.height);
-    }
-}
-
 const IconEntry* FindUsableIcon(const IconSource& source, std::uint32_t icon_id)
 {
     const auto it = source.icons.find(icon_id);
@@ -131,6 +135,89 @@ const IconEntry* FindUsableIcon(const IconSource& source, std::uint32_t icon_id)
 
     const Atlas& atlas = g_atlases[entry.atlas_index];
     return atlas.gpu_srv.ptr ? &entry : nullptr;
+}
+
+const IconEntry* FindLayoutIcon(const IconSource& source, std::uint32_t icon_id)
+{
+    const auto it = source.icons.find(icon_id);
+    if (it == source.icons.end()) return nullptr;
+    if (it->second.atlas_index >= g_atlas_count) return nullptr;
+    return &it->second;
+}
+
+IconSource* SourceForAtlas(const Atlas& atlas)
+{
+    if (atlas.source == g_hi_source.label) return &g_hi_source;
+    if (atlas.source == g_low_source.label) return &g_low_source;
+    return nullptr;
+}
+
+bool UploadAtlas(std::size_t atlas_index)
+{
+    if (atlas_index >= g_atlas_count || atlas_index >= g_srv_count) return false;
+
+    Atlas& atlas = g_atlases[atlas_index];
+    if (atlas.texture && atlas.gpu_srv.ptr) return true;
+    if (atlas.upload_failed) return false;
+
+    IconSource* source = SourceForAtlas(atlas);
+    if (!source || source->tpf.empty()) {
+        atlas.upload_failed = true;
+        return false;
+    }
+
+    std::vector<std::uint8_t> dds;
+    if (!icon_assets::ExtractTpfTexture(source->tpf, atlas.name, dds)) {
+        ++source->missing_texture_count;
+        if (source->missing_texture_count <= 4) {
+            Log("Icon loader: %s missing atlas texture '%s' in TPF.", source->label, atlas.name.c_str());
+        }
+        atlas.upload_failed = true;
+        return false;
+    }
+
+    d3d_texture_upload::UploadedTexture texture{};
+    if (!d3d_texture_upload::UploadBc7Texture(g_device, g_queue, g_cpu_srvs[atlas_index], dds, texture)) {
+        ++source->upload_failure_count;
+        if (source->upload_failure_count <= 4) {
+            Log("Icon loader: %s failed to upload atlas '%s' (%zu DDS bytes).",
+                source->label,
+                atlas.name.c_str(),
+                dds.size());
+        }
+        atlas.upload_failed = true;
+        return false;
+    }
+
+    atlas.texture = texture.resource;
+    atlas.width = texture.width;
+    atlas.height = texture.height;
+    atlas.gpu_srv = g_gpu_srvs[atlas_index];
+    source->uploaded_any = true;
+    ++source->uploaded_count;
+    Log("Icon loader uploaded atlas[%zu]: source=%s name='%s' size=%.0fx%.0f.",
+        atlas_index,
+        source->label,
+        atlas.name.c_str(),
+        atlas.width,
+        atlas.height);
+    return true;
+}
+
+void LogSourceReadResult(const IconSource& source, bool read_tpf, bool read_layout)
+{
+    bool* logged = source.label == g_hi_source.label ? &g_logged_hi_read_result : &g_logged_low_read_result;
+    bool* last_tpf = source.label == g_hi_source.label ? &g_last_hi_tpf_read : &g_last_low_tpf_read;
+    bool* last_layout = source.label == g_hi_source.label ? &g_last_hi_layout_read : &g_last_low_layout_read;
+    if (*logged && *last_tpf == read_tpf && *last_layout == read_layout) return;
+
+    *logged = true;
+    *last_tpf = read_tpf;
+    *last_layout = read_layout;
+    Log("Icon loader source read result: source=%s tpf=%d layout=%d.",
+        source.label,
+        read_tpf ? 1 : 0,
+        read_layout ? 1 : 0);
 }
 
 }  // namespace
@@ -156,13 +243,18 @@ bool TryInitialize(
         {L"data0:/menu/low/01_common.tpf.dcx", L"data0:/menu/low/01_common.sblytbnd.dcx", true, &g_low_source},
     };
 
-    const char* selected_label = nullptr;
-    std::size_t total_uploaded_count = 0;
-    std::size_t total_missing_texture_count = 0;
-    std::size_t total_upload_failure_count = 0;
     g_logged_begin = true;
     if (asset_reader::HasGameReadContext()) g_logged_waiting_for_vfs_context = false;
     ResetLoadedIconState();
+    g_device = device;
+    g_queue = queue;
+    g_srv_count = srv_count;
+    for (std::size_t i = 0; i < g_atlases.size(); ++i) {
+        g_cpu_srvs[i] = cpu_srvs[i];
+        g_gpu_srvs[i] = gpu_srvs[i];
+    }
+
+    const char* selected_label = nullptr;
 
     for (const Candidate& candidate : candidates) {
         IconSource& source = *candidate.source;
@@ -170,6 +262,7 @@ bool TryInitialize(
         std::vector<std::uint8_t> sblyt_dcx;
         const bool read_tpf = asset_reader::ReadFile(candidate.tpf_path, tpf_dcx, 160ull * 1024ull * 1024ull);
         const bool read_layout = asset_reader::ReadFile(candidate.layout_path, sblyt_dcx, 4ull * 1024ull * 1024ull);
+        LogSourceReadResult(source, read_tpf, read_layout);
         if (!read_tpf || !read_layout) {
             continue;
         }
@@ -195,55 +288,13 @@ bool TryInitialize(
 
         const auto layout_icons = icon_assets::ParseLayoutIcons(sblyt);
         const auto candidate_atlases = AddLayoutIcons(source, layout_icons);
-        std::size_t uploaded_count = 0;
-        std::size_t missing_texture_count = 0;
-        std::size_t upload_failure_count = 0;
-        for (const std::size_t i : candidate_atlases) {
-            std::vector<std::uint8_t> dds;
-            if (!icon_assets::ExtractTpfTexture(tpf, g_atlases[i].name, dds)) {
-                ++missing_texture_count;
-                if (missing_texture_count <= 4) {
-                    Log("Icon loader: %s missing atlas texture '%s' in TPF.", source.label, g_atlases[i].name.c_str());
-                }
-                continue;
-            }
-
-            d3d_texture_upload::UploadedTexture texture{};
-            if (d3d_texture_upload::UploadBc7Texture(device, queue, cpu_srvs[i], dds, texture)) {
-                g_atlases[i].texture = texture.resource;
-                g_atlases[i].width = texture.width;
-                g_atlases[i].height = texture.height;
-                g_atlases[i].gpu_srv = gpu_srvs[i];
-                ++uploaded_count;
-            } else {
-                ++upload_failure_count;
-                if (upload_failure_count <= 4) {
-                    Log("Icon loader: %s failed to upload atlas '%s' (%zu DDS bytes).",
-                        source.label,
-                        g_atlases[i].name.c_str(),
-                        dds.size());
-                }
-            }
-        }
-        source.uploaded_any = uploaded_count != 0;
-        source.uploaded_count = uploaded_count;
-        source.missing_texture_count = missing_texture_count;
-        source.upload_failure_count = upload_failure_count;
-
-        if (uploaded_count == 0) {
-            Log("Icon loader: %s icon assets parsed but no atlases uploaded (icons=%zu atlases=%zu).",
-                source.label,
-                source.icons.size(),
-                g_atlas_count);
+        if (source.icons.empty() || candidate_atlases.empty()) {
+            Log("Icon loader: %s icon layout parsed but no icons were found.", source.label);
             continue;
         }
-        total_missing_texture_count += missing_texture_count;
-        total_upload_failure_count += upload_failure_count;
 
-        if (uploaded_count != 0) {
-            if (!selected_label) selected_label = source.label;
-            total_uploaded_count += uploaded_count;
-        }
+        source.tpf = std::move(tpf);
+        if (!selected_label) selected_label = source.label;
     }
 
     if (!g_hi_source.saw_assets && !g_low_source.saw_assets) {
@@ -261,27 +312,106 @@ bool TryInitialize(
         }
         return false;
     }
-    if ((g_hi_source.icons.empty() && g_low_source.icons.empty()) || total_uploaded_count == 0) {
-        Log("Icon loader: failed to upload atlases (hi_icons=%zu low_icons=%zu uploaded=%zu).",
+    if (g_hi_source.icons.empty() && g_low_source.icons.empty()) {
+        Log("Icon loader: failed to parse icon layouts (hi_icons=%zu low_icons=%zu).",
             g_hi_source.icons.size(),
-            g_low_source.icons.size(),
-            total_uploaded_count);
+            g_low_source.icons.size());
         ResetLoadedIconState();
         g_failed = true;
         return false;
     }
 
     g_initialized = true;
-    Log("Icon loader ready (primary=%s hi_icons=%zu low_icons=%zu atlases=%zu uploaded=%zu missing_textures=%zu upload_failures=%zu).",
+    Log("Icon loader metadata ready (primary=%s hi_icons=%zu low_icons=%zu atlases=%zu).",
         selected_label ? selected_label : "unknown",
         g_hi_source.icons.size(),
         g_low_source.icons.size(),
-        g_atlas_count,
-        total_uploaded_count,
-        total_missing_texture_count,
-        total_upload_failure_count);
-    LogLoadedAtlases();
+        g_atlas_count);
     return true;
+}
+
+void SetRequiredIcons(const std::vector<std::uint32_t>& icon_ids)
+{
+    if (!g_initialized || !g_device || !g_queue) return;
+
+    std::vector<std::size_t> required_atlases;
+    required_atlases.reserve(icon_ids.size());
+    std::size_t uploaded_count = 0;
+
+    const auto add_required = [&required_atlases](std::size_t atlas_index) {
+        if (std::find(required_atlases.begin(), required_atlases.end(), atlas_index) == required_atlases.end()) {
+            required_atlases.push_back(atlas_index);
+        }
+    };
+
+    for (const std::uint32_t icon_id : icon_ids) {
+        if (icon_id == 0) continue;
+
+        bool uploaded = false;
+        if (const IconEntry* entry = FindLayoutIcon(g_hi_source, icon_id)) {
+            const bool was_uploaded = g_atlases[entry->atlas_index].texture != nullptr;
+            uploaded = UploadAtlas(entry->atlas_index);
+            if (uploaded) {
+                add_required(entry->atlas_index);
+                if (!was_uploaded) ++uploaded_count;
+            }
+        }
+
+        if (!uploaded) {
+            if (const IconEntry* entry = FindLayoutIcon(g_low_source, icon_id)) {
+                const bool was_uploaded = g_atlases[entry->atlas_index].texture != nullptr;
+                uploaded = UploadAtlas(entry->atlas_index);
+                if (uploaded) {
+                    add_required(entry->atlas_index);
+                    if (!was_uploaded) ++uploaded_count;
+                }
+            }
+        }
+    }
+
+    std::sort(required_atlases.begin(), required_atlases.end());
+
+    const bool changed = required_atlases != g_required_atlases;
+    g_required_atlases = std::move(required_atlases);
+    if (changed || uploaded_count != 0) {
+        Log("Icon loader required atlases updated (icons=%zu atlases=%zu uploaded=%zu).",
+            icon_ids.size(),
+            g_required_atlases.size(),
+            uploaded_count);
+    }
+}
+
+bool PreloadIcons(const std::vector<std::uint32_t>& icon_ids, std::size_t max_uploads)
+{
+    if (!g_initialized || !g_device || !g_queue) return false;
+
+    std::size_t uploaded_count = 0;
+    bool pending_upload = false;
+
+    const auto try_upload = [&](const IconEntry* entry) -> bool {
+        if (!entry || entry->atlas_index >= g_atlas_count) return false;
+
+        Atlas& atlas = g_atlases[entry->atlas_index];
+        if (atlas.texture && atlas.gpu_srv.ptr) return true;
+        if (atlas.upload_failed) return false;
+
+        if (uploaded_count >= max_uploads) {
+            pending_upload = true;
+            return false;
+        }
+
+        const bool uploaded = UploadAtlas(entry->atlas_index);
+        if (uploaded) ++uploaded_count;
+        return uploaded;
+    };
+
+    for (const std::uint32_t icon_id : icon_ids) {
+        if (icon_id == 0) continue;
+        if (try_upload(FindLayoutIcon(g_hi_source, icon_id))) continue;
+        (void)try_upload(FindLayoutIcon(g_low_source, icon_id));
+    }
+
+    return !pending_upload;
 }
 
 radial_menu::IconTextureInfo Resolve(std::uint32_t icon_id)
@@ -313,7 +443,18 @@ radial_menu::IconTextureInfo Resolve(std::uint32_t icon_id)
 void Shutdown()
 {
     ResetLoadedIconState();
+    g_device = nullptr;
+    g_queue = nullptr;
+    g_srv_count = 0;
+    g_cpu_srvs = {};
+    g_gpu_srvs = {};
     g_logged_missing_icon_ids.clear();
+    g_logged_hi_read_result = false;
+    g_logged_low_read_result = false;
+    g_last_hi_tpf_read = false;
+    g_last_hi_layout_read = false;
+    g_last_low_tpf_read = false;
+    g_last_low_layout_read = false;
     g_initialized = false;
     g_failed = false;
 }

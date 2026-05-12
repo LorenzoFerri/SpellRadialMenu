@@ -57,6 +57,14 @@ std::uint32_t ReadInventoryEntryGoodsId(std::uintptr_t head, std::uint32_t index
     return UnpackGoodsItemId(packed_item_id);
 }
 
+bool ReadQuickSlotInventoryIndex(std::uintptr_t equip_item_data, std::size_t slot, std::int32_t& inventory_index)
+{
+    if (!equip_item_data || slot >= kMaxQuickItemSlots) return false;
+
+    const auto quick_slot = equip_item_data + kFirstQuickItemSlotOffset + slot * kQuickItemSlotStride;
+    return ReadMemory(quick_slot + kQuickItemSlotInventoryIndexOffset, inventory_index);
+}
+
 }  // namespace
 
 std::uintptr_t ResolveGameDataManAddress()
@@ -96,39 +104,46 @@ int ResolveCurrentSpellEntrySlot(std::uintptr_t equip_magic_data)
 
 std::uint32_t ReadQuickItemId(std::uintptr_t equip_item_data, std::size_t slot)
 {
-    if (!equip_item_data || slot >= kMaxQuickItemSlots) return 0;
+    QuickItemInventorySnapshot snapshot{};
+    return ReadQuickItemInventorySnapshot(equip_item_data, snapshot) ? ReadQuickItemId(snapshot, slot) : 0;
+}
 
-    const auto quick_slot = equip_item_data + kFirstQuickItemSlotOffset + slot * kQuickItemSlotStride;
-    std::int32_t inventory_index = -1;
-    if (!ReadMemory(quick_slot + kQuickItemSlotInventoryIndexOffset, inventory_index)) return 0;
-    if (inventory_index < 0) return 0;
+bool ReadQuickItemInventorySnapshot(std::uintptr_t equip_item_data, QuickItemInventorySnapshot& snapshot)
+{
+    snapshot = {};
+    if (!equip_item_data) return false;
+
+    snapshot.equip_item_data = equip_item_data;
 
     std::uintptr_t inventory = 0;
-    if (!ReadMemory(equip_item_data + kQuickItemInventoryOffset, inventory)) return 0;
-    if (!inventory) return 0;
+    if (!ReadMemory(equip_item_data + kQuickItemInventoryOffset, inventory)) return false;
+    if (!inventory) return false;
 
-    std::uintptr_t key_items_head = 0;
-    std::uint32_t key_items_length = 0;
-    std::uintptr_t normal_items_head = 0;
-    std::uint32_t normal_capacity = 0;
-    std::uint32_t key_capacity = 0;
-
-    ReadMemory(inventory + kCurrentKeyItemsHeadOffset, key_items_head);
+    ReadMemory(inventory + kCurrentKeyItemsHeadOffset, snapshot.key_items_head);
     std::uintptr_t key_items_length_ptr = 0;
     ReadMemory(inventory + kCurrentKeyItemsLengthPtrOffset, key_items_length_ptr);
-    ReadMemory(key_items_length_ptr, key_items_length);
-    ReadMemory(inventory + kNormalItemsHeadOffset, normal_items_head);
-    ReadMemory(inventory + kNormalItemsCapacityOffset, normal_capacity);
-    ReadMemory(inventory + kKeyItemsCapacityOffset, key_capacity);
-    if (key_capacity == 0 || key_capacity > 10000) return 0;
+    ReadMemory(key_items_length_ptr, snapshot.key_items_length);
+    ReadMemory(inventory + kNormalItemsHeadOffset, snapshot.normal_items_head);
+    ReadMemory(inventory + kNormalItemsCapacityOffset, snapshot.normal_capacity);
+    ReadMemory(inventory + kKeyItemsCapacityOffset, snapshot.key_capacity);
+    return snapshot.key_capacity != 0 && snapshot.key_capacity <= 10000;
+}
+
+std::uint32_t ReadQuickItemId(const QuickItemInventorySnapshot& snapshot, std::size_t slot)
+{
+    if (!snapshot.equip_item_data || slot >= kMaxQuickItemSlots) return 0;
+
+    std::int32_t inventory_index = -1;
+    if (!ReadQuickSlotInventoryIndex(snapshot.equip_item_data, slot, inventory_index)) return 0;
+    if (inventory_index < 0) return 0;
 
     const auto item_slot = static_cast<std::uint32_t>(inventory_index);
-    if (item_slot < key_capacity) {
-        return ReadInventoryEntryGoodsId(key_items_head, item_slot, key_items_length);
+    if (item_slot < snapshot.key_capacity) {
+        return ReadInventoryEntryGoodsId(snapshot.key_items_head, item_slot, snapshot.key_items_length);
     }
 
-    const std::uint32_t normal_index = item_slot - key_capacity;
-    return ReadInventoryEntryGoodsId(normal_items_head, normal_index, normal_capacity);
+    const std::uint32_t normal_index = item_slot - snapshot.key_capacity;
+    return ReadInventoryEntryGoodsId(snapshot.normal_items_head, normal_index, snapshot.normal_capacity);
 }
 
 }  // namespace radial_menu_mod::equip_access

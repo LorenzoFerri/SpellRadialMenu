@@ -1,8 +1,11 @@
 #include "game/metadata/item_metadata.h"
 
+#include "core/common.h"
 #include "game/messages/message_repository.h"
 #include "game/metadata/seamless_coop_metadata.h"
 #include "game/params/param_repository.h"
+
+#include <windows.h>
 
 #include <cstdio>
 #include <mutex>
@@ -18,6 +21,21 @@ constexpr std::uintptr_t kGoodsIconIdOffset = 0x30;
 std::mutex g_cache_mutex;
 std::unordered_map<std::uint32_t, ResolvedItemMetadata> g_item_metadata_cache;
 std::uintptr_t g_goods_param_offset = 0;
+ULONGLONG g_last_slow_item_metadata_log_ms = 0;
+
+void LogSlowItemMetadata(std::uint32_t item_id, ULONGLONG start_ms, const ResolvedItemMetadata& metadata)
+{
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG elapsed = now - start_ms;
+    if (elapsed < 16) return;
+    if (g_last_slow_item_metadata_log_ms != 0 && now - g_last_slow_item_metadata_log_ms < 2000) return;
+
+    g_last_slow_item_metadata_log_ms = now;
+    Log("Timing: ResolveItemMetadata(%u) took %llums (icon=%u).",
+        item_id,
+        static_cast<unsigned long long>(elapsed),
+        metadata.icon_id);
+}
 
 std::uintptr_t LocateEquipParamGoodsOffset(std::uintptr_t repo)
 {
@@ -69,6 +87,7 @@ ResolvedItemMetadata ResolveItemMetadata(std::uint32_t item_id)
         }
     }
 
+    const ULONGLONG start = GetTickCount64();
     std::string name = message_repository::LookupGoodsName(item_id);
     if (name.empty()) {
         char buf[32] = {};
@@ -85,8 +104,11 @@ ResolvedItemMetadata ResolveItemMetadata(std::uint32_t item_id)
         .icon_id = icon_id,
     };
 
-    std::lock_guard lock(g_cache_mutex);
-    g_item_metadata_cache[item_id] = metadata;
+    {
+        std::lock_guard lock(g_cache_mutex);
+        g_item_metadata_cache[item_id] = metadata;
+    }
+    LogSlowItemMetadata(item_id, start, metadata);
     return metadata;
 }
 

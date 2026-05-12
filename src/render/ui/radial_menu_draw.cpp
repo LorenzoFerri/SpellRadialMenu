@@ -72,7 +72,7 @@ ImVec2 PolarPoint(const ImVec2& center, float angle, float radius)
 void AddRingSegment(ImDrawList* draw_list, const ImVec2& center, float inner_radius, float outer_radius,
     float start_angle, float end_angle, ImU32 fill, ImU32 border, float border_thickness)
 {
-    const int segments = std::max(18, static_cast<int>((end_angle - start_angle) * 32.0f));
+    const int segments = std::max(12, static_cast<int>((end_angle - start_angle) * 18.0f));
     draw_list->PathClear();
     draw_list->PathArcTo(center, outer_radius, start_angle, end_angle, segments);
     draw_list->PathArcTo(center, inner_radius, end_angle, start_angle, segments);
@@ -93,7 +93,7 @@ void AddSegmentSeparator(ImDrawList* draw_list, const ImVec2& center, float angl
 void AddArcStroke(ImDrawList* draw_list, const ImVec2& center, float radius, float start_angle, float end_angle,
     ImU32 color, float thickness)
 {
-    const int segments = std::max(12, static_cast<int>((end_angle - start_angle) * 24.0f));
+    const int segments = std::max(8, static_cast<int>((end_angle - start_angle) * 14.0f));
     draw_list->PathClear();
     draw_list->PathArcTo(center, radius, start_angle, end_angle, segments);
     draw_list->PathStroke(color, 0, thickness);
@@ -210,10 +210,10 @@ void DrawBackdrop(ImDrawList* draw_list, const RadialLayout& layout)
     const float outer_frame_radius = layout.wheel_outer_radius + (8.0f * layout.ui_scale);
 
     draw_list->AddRectFilled(layout.viewport->Pos, layout.bottom_right, IM_COL32(0, 0, 0, 72));
-    draw_list->AddCircleFilled(layout.center, overlay_shadow_radius, IM_COL32(0, 0, 0, 48), 128);
-    draw_list->AddCircleFilled(layout.center, outer_frame_radius, IM_COL32(12, 11, 10, 210), 128);
-    draw_list->AddCircle(layout.center, outer_frame_radius, IM_COL32(110, 94, 64, 180), 128, 2.0f * layout.ui_scale);
-    draw_list->AddCircle(layout.center, layout.wheel_outer_radius - (4.0f * layout.ui_scale), IM_COL32(171, 148, 102, 170), 128, 1.5f * layout.ui_scale);
+    draw_list->AddCircleFilled(layout.center, overlay_shadow_radius, IM_COL32(0, 0, 0, 48), 72);
+    draw_list->AddCircleFilled(layout.center, outer_frame_radius, IM_COL32(12, 11, 10, 210), 72);
+    draw_list->AddCircle(layout.center, outer_frame_radius, IM_COL32(110, 94, 64, 180), 72, 2.0f * layout.ui_scale);
+    draw_list->AddCircle(layout.center, layout.wheel_outer_radius - (4.0f * layout.ui_scale), IM_COL32(171, 148, 102, 170), 72, 1.5f * layout.ui_scale);
 }
 
 void DrawWheel(ImDrawList* draw_list, const RadialLayout& layout, const std::vector<RadialSlot>& slots,
@@ -250,11 +250,11 @@ void DrawWheel(ImDrawList* draw_list, const RadialLayout& layout, const std::vec
 
 void DrawCenterPanel(ImDrawList* draw_list, const RadialLayout& layout)
 {
-    draw_list->AddCircleFilled(layout.center, layout.center_panel_radius + (14.0f * layout.ui_scale), IM_COL32(8, 8, 8, 190), 96);
-    draw_list->AddCircleFilled(layout.center, layout.center_panel_radius, IM_COL32(18, 17, 15, 224), 96);
-    draw_list->AddCircle(layout.center, layout.center_panel_radius + (14.0f * layout.ui_scale), IM_COL32(136, 115, 78, 180), 96, 1.5f * layout.ui_scale);
-    draw_list->AddCircle(layout.center, layout.center_panel_radius, IM_COL32(176, 151, 106, 190), 96, 1.5f * layout.ui_scale);
-    draw_list->AddCircle(layout.center, layout.center_panel_radius - (12.0f * layout.ui_scale), IM_COL32(94, 79, 54, 120), 96, 1.0f * layout.ui_scale);
+    draw_list->AddCircleFilled(layout.center, layout.center_panel_radius + (14.0f * layout.ui_scale), IM_COL32(8, 8, 8, 190), 56);
+    draw_list->AddCircleFilled(layout.center, layout.center_panel_radius, IM_COL32(18, 17, 15, 224), 56);
+    draw_list->AddCircle(layout.center, layout.center_panel_radius + (14.0f * layout.ui_scale), IM_COL32(136, 115, 78, 180), 56, 1.5f * layout.ui_scale);
+    draw_list->AddCircle(layout.center, layout.center_panel_radius, IM_COL32(176, 151, 106, 190), 56, 1.5f * layout.ui_scale);
+    draw_list->AddCircle(layout.center, layout.center_panel_radius - (12.0f * layout.ui_scale), IM_COL32(94, 79, 54, 120), 56, 1.0f * layout.ui_scale);
 }
 
 void DrawSelectedDetails(ImDrawList* draw_list, ImFont* font, float base_font_size, const RadialLayout& layout,
