@@ -25,6 +25,7 @@ using ChrCamInputAccelerationUpdateFn = void (*)(void* chr_cam, bool enabled);
 
 bool g_chr_cam_input_acceleration_update_hook_installed = false;
 bool g_chr_cam_input_acceleration_update_hook_failed = false;
+bool g_camera_hook_installation_complete = false;
 bool g_logged_camera_acceleration_suppression = false;
 
 float g_selection_x = 0.0f;
@@ -169,9 +170,13 @@ void TryInstallHook(const char* name, std::uintptr_t rva, void* detour, Fn*& ori
 
 void TryInstallCameraHooks()
 {
+    if (g_camera_hook_installation_complete) return;
+
     TryInstallHook("ChrCam input acceleration update", kChrCamInputAccelerationUpdateRva,
         reinterpret_cast<void*>(&HookedChrCamInputAccelerationUpdate), g_original_chr_cam_input_acceleration_update,
         g_chr_cam_input_acceleration_update_hook_installed, g_chr_cam_input_acceleration_update_hook_failed);
+    g_camera_hook_installation_complete = g_chr_cam_input_acceleration_update_hook_installed ||
+        g_chr_cam_input_acceleration_update_hook_failed;
 }
 
 }  // namespace

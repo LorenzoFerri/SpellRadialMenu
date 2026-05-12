@@ -51,10 +51,12 @@ static D3D12_CPU_DESCRIPTOR_HANDLE g_icon_srv_cpu[icon_loader::kMaxAtlases] = {}
 static D3D12_GPU_DESCRIPTOR_HANDLE g_icon_srv_gpu[icon_loader::kMaxAtlases] = {};
 static bool                        g_icon_srv_allocated = false;
 static bool                        g_icons_ready = false;
+static bool                        g_asset_reader_installed = false;
 static bool                        g_logged_icon_vfs_unavailable = false;
 static ULONGLONG                   g_next_icon_init_attempt_ms = 0;
 static int                         g_icon_prewarm_phase = 0;
 static bool                        g_logged_icon_prewarm_complete = false;
+static bool                        g_refreshed_open_icon_atlases = false;
 static std::vector<std::uint32_t>  g_icon_prewarm_ids;
 static ULONGLONG                   g_last_slow_asset_install_log_ms = 0;
 static ULONGLONG                   g_last_slow_gameplay_state_log_ms = 0;
@@ -264,6 +266,7 @@ static void ReleaseOverlayResources(const char* reason)
     g_rtv_stride = 0;
     g_next_icon_init_attempt_ms = 0;
     ResetIconPrewarm();
+    g_refreshed_open_icon_atlases = false;
     g_last_slow_asset_install_log_ms = 0;
     g_last_slow_gameplay_state_log_ms = 0;
     g_last_slow_native_input_log_ms = 0;
@@ -422,11 +425,13 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
     }
 
     ULONGLONG section_start = GetTickCount64();
-    const bool asset_reader_installed = asset_reader::Install();
-    LogSlowDuration("asset_reader::Install", section_start, 4, g_last_slow_asset_install_log_ms);
-    if (!asset_reader_installed && !g_logged_icon_vfs_unavailable) {
-        Log("Icon loader: game VFS hook unavailable; icon archives cannot be read from game memory.");
-        g_logged_icon_vfs_unavailable = true;
+    if (!g_asset_reader_installed) {
+        g_asset_reader_installed = asset_reader::Install();
+        LogSlowDuration("asset_reader::Install", section_start, 4, g_last_slow_asset_install_log_ms);
+        if (!g_asset_reader_installed && !g_logged_icon_vfs_unavailable) {
+            Log("Icon loader: game VFS hook unavailable; icon archives cannot be read from game memory.");
+            g_logged_icon_vfs_unavailable = true;
+        }
     }
 
     section_start = GetTickCount64();
@@ -446,15 +451,18 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
             TryInitializeIcons();
             LogSlowDuration("TryInitializeIcons", section_start, 16, g_last_slow_icon_init_log_ms);
         }
-        if (g_icons_ready && radial_open) {
+        if (g_icons_ready && radial_open && !g_refreshed_open_icon_atlases) {
             RefreshRequiredIconAtlasesForSlots(radial_input::GetOpenRadialSlots());
+            g_refreshed_open_icon_atlases = true;
         }
         if (g_icons_ready && !radial_open) {
+            g_refreshed_open_icon_atlases = false;
             PrewarmRadialIcons();
         }
     } else {
         InvalidateRadialSlotCaches();
         ResetIconPrewarm();
+        g_refreshed_open_icon_atlases = false;
     }
 
     if (!radial_open) {
