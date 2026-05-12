@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace radial_menu_mod {
@@ -52,22 +53,62 @@ inline std::uintptr_t ResolveRipRelative(std::uintptr_t addr, std::uintptr_t dis
     return addr + insn_size + disp;
 }
 
-inline bool IsReadableMemory(const void* ptr, std::size_t bytes)
+struct CachedReadableRegion {
+    std::uintptr_t begin = 0;
+    std::uintptr_t end = 0;
+
+    void Reset()
+    {
+        begin = 0;
+        end = 0;
+    }
+};
+
+inline bool IsReadableProtection(DWORD protect)
+{
+    protect &= 0xFFu;
+    return protect == PAGE_READONLY || protect == PAGE_READWRITE || protect == PAGE_WRITECOPY ||
+        protect == PAGE_EXECUTE_READ || protect == PAGE_EXECUTE_READWRITE || protect == PAGE_EXECUTE_WRITECOPY;
+}
+
+inline bool IsInCachedReadableRegion(const CachedReadableRegion& region, std::uintptr_t address, std::size_t bytes)
+{
+    return region.begin != 0 && address >= region.begin && address + bytes >= address && address + bytes <= region.end;
+}
+
+inline bool RefreshCachedReadableRegion(std::uintptr_t address, std::size_t bytes, CachedReadableRegion& region)
 {
     MEMORY_BASIC_INFORMATION mbi{};
-    if (!ptr || VirtualQuery(ptr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+    if (!address || VirtualQuery(reinterpret_cast<const void*>(address), &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
     if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) || (mbi.Protect & PAGE_NOACCESS)) return false;
+    if (!IsReadableProtection(mbi.Protect)) return false;
 
-    const DWORD protect = mbi.Protect & 0xFFu;
-    const bool readable = protect == PAGE_READONLY || protect == PAGE_READWRITE || protect == PAGE_WRITECOPY ||
-                          protect == PAGE_EXECUTE_READ || protect == PAGE_EXECUTE_READWRITE ||
-                          protect == PAGE_EXECUTE_WRITECOPY;
-    if (!readable) return false;
+    const auto begin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+    const auto end = begin + static_cast<std::uintptr_t>(mbi.RegionSize);
+    if (address < begin || address + bytes < address || address + bytes > end) return false;
 
-    const auto begin = reinterpret_cast<std::uintptr_t>(ptr);
-    const auto region_begin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
-    const auto region_end = region_begin + static_cast<std::uintptr_t>(mbi.RegionSize);
-    return begin >= region_begin && begin + bytes >= begin && begin + bytes <= region_end;
+    region.begin = begin;
+    region.end = end;
+    return true;
+}
+
+inline bool EnsureCachedReadableMemory(std::uintptr_t address, std::size_t bytes, CachedReadableRegion& region)
+{
+    return IsInCachedReadableRegion(region, address, bytes) || RefreshCachedReadableRegion(address, bytes, region);
+}
+
+template <typename T>
+inline bool ReadCachedMemory(std::uintptr_t address, T& value, CachedReadableRegion& region)
+{
+    if (!EnsureCachedReadableMemory(address, sizeof(T), region)) return false;
+    value = *reinterpret_cast<const T*>(address);
+    return true;
+}
+
+inline bool IsReadableMemory(const void* ptr, std::size_t bytes)
+{
+    CachedReadableRegion region{};
+    return RefreshCachedReadableRegion(reinterpret_cast<std::uintptr_t>(ptr), bytes, region);
 }
 
 template <typename T>
