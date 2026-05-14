@@ -23,6 +23,8 @@ constexpr std::uintptr_t kSwitchSpellRepeatCheckRva = 0x758920;
 constexpr std::uintptr_t kCanSwitchSpellRva = 0x250850;
 constexpr std::uintptr_t kSwitchItemNextRva = 0x24FED0;
 constexpr std::uintptr_t kSwitchSpellNextRva = 0x250E60;
+constexpr std::uintptr_t kEquipmentChangeSoundEventRva = 0x814FC0;
+constexpr std::uintptr_t kEquipmentChangeSoundEventVtableRva = 0x2A9DBD0;
 
 constexpr std::int32_t kSwitchSpell2Input = 24;
 constexpr std::int32_t kSwitchItem2Input = 25;
@@ -31,6 +33,17 @@ constexpr std::int32_t kSwitchItemAction = 14;
 constexpr DWORD kRadialHoldThresholdMs = 220;
 constexpr DWORD kNativeActionReleaseGraceMs = 120;
 constexpr std::uintptr_t kHudSpellVisibleOffset = 0x4D;
+constexpr std::uintptr_t kHudForceVisibleOffset = 0xAF4;
+constexpr std::uintptr_t kHudItemFeedbackOffset = 0x08;
+constexpr std::uintptr_t kHudSpellFeedbackOffset = 0x09;
+
+struct EquipmentChangeSoundEvent {
+    std::int32_t event_id = 0x2710;
+    std::int32_t target = -1;
+    std::int32_t category = 3;
+    std::int32_t padding = 0;
+    void* vtable = nullptr;
+};
 
 struct CaptureState {
     bool input_down = false;
@@ -47,6 +60,7 @@ using InputHoldCheckFn = bool (*)(void* input_state, std::int32_t action);
 using CanSwitchSpellFn = bool (*)(void* equip_magic_data);
 using SwitchSpellNextFn = void (*)(void* equip_magic_data);
 using SwitchItemNextFn = void (*)(void* equip_item_data);
+using EquipmentChangeSoundEventFn = void (*)(EquipmentChangeSoundEvent* event);
 
 CaptureState g_spell_capture = {};
 CaptureState g_item_capture = {};
@@ -74,8 +88,12 @@ int g_input_cache_warm_phase = 0;
 bool g_input_cache_warmed = false;
 bool g_was_normal_gameplay = false;
 bool g_spell_hud_visible = true;
+bool g_selection_feedback_spell_pending = false;
+bool g_selection_feedback_item_pending = false;
 CachedReadableRegion g_equipment_hud_context_region = {};
 CachedReadableRegion g_spell_hud_visible_region = {};
+CachedReadableRegion g_hud_feedback_region = {};
+CachedReadableRegion g_hud_force_visible_region = {};
 
 bool g_logged_switch_spell_request_suppression = false;
 bool g_logged_switch_item_request_suppression = false;
@@ -98,6 +116,17 @@ InputRequestCheckFn g_original_switch_item_repeat_check = nullptr;
 CanSwitchSpellFn g_original_can_switch_spell = nullptr;
 SwitchSpellNextFn g_original_switch_spell_next = nullptr;
 SwitchItemNextFn g_original_switch_item_next = nullptr;
+EquipmentChangeSoundEventFn g_equipment_change_sound_event = nullptr;
+void* g_equipment_change_sound_event_vtable = nullptr;
+bool g_searched_equipment_change_sound_event = false;
+
+template <typename T>
+bool WriteCachedGameMemory(std::uintptr_t address, const T& value, CachedReadableRegion& region)
+{
+    if (!EnsureCachedReadableMemory(address, sizeof(T), region)) return false;
+    *reinterpret_cast<T*>(address) = value;
+    return true;
+}
 
 void BeginCapture(CaptureState& capture)
 {
@@ -164,6 +193,47 @@ bool ShouldSuppressItemSwitch(void* equip_item_data)
         reinterpret_cast<std::uintptr_t>(equip_item_data) == current_equip_item_data;
 }
 
+void PlayEquipmentChangeSound()
+{
+    if (!g_searched_equipment_change_sound_event) {
+        g_searched_equipment_change_sound_event = true;
+        const auto function_address = GetModuleBase() + kEquipmentChangeSoundEventRva;
+        const auto vtable_address = GetModuleBase() + kEquipmentChangeSoundEventVtableRva;
+        if (IsReadableMemory(reinterpret_cast<const void*>(function_address), 1) &&
+            IsReadableMemory(reinterpret_cast<const void*>(vtable_address), sizeof(void*))) {
+            g_equipment_change_sound_event = reinterpret_cast<EquipmentChangeSoundEventFn>(function_address);
+            g_equipment_change_sound_event_vtable = reinterpret_cast<void*>(vtable_address);
+        }
+    }
+    if (g_equipment_change_sound_event == nullptr || g_equipment_change_sound_event_vtable == nullptr) return;
+
+    EquipmentChangeSoundEvent event = {};
+    event.vtable = g_equipment_change_sound_event_vtable;
+    g_equipment_change_sound_event(&event);
+}
+
+void ApplyPendingSelectionFeedback(std::uintptr_t hud_context, std::uintptr_t hud_state)
+{
+    if (!g_selection_feedback_spell_pending && !g_selection_feedback_item_pending) return;
+
+    const std::uint8_t enabled = 1;
+    bool applied = false;
+    if (g_selection_feedback_spell_pending) {
+        applied |= WriteCachedGameMemory(hud_context + kHudSpellFeedbackOffset, enabled, g_hud_feedback_region);
+    }
+    if (g_selection_feedback_item_pending) {
+        applied |= WriteCachedGameMemory(hud_context + kHudItemFeedbackOffset, enabled, g_hud_feedback_region);
+    }
+    if (hud_state) {
+        WriteCachedGameMemory(hud_state + kHudForceVisibleOffset, enabled, g_hud_force_visible_region);
+    }
+
+    if (applied) {
+        g_selection_feedback_spell_pending = false;
+        g_selection_feedback_item_pending = false;
+    }
+}
+
 void HookedEquipmentHudUpdate(void* hud_context, void* arg2, void* arg3)
 {
     if (g_original_equipment_hud_update != nullptr) g_original_equipment_hud_update(hud_context, arg2, arg3);
@@ -175,6 +245,7 @@ void HookedEquipmentHudUpdate(void* hud_context, void* arg2, void* arg3)
         hud_state && ReadCachedMemory(hud_state + kHudSpellVisibleOffset, spell_visible, g_spell_hud_visible_region)) {
         g_spell_hud_visible = spell_visible != 0;
     }
+    ApplyPendingSelectionFeedback(reinterpret_cast<std::uintptr_t>(hud_context), hud_state);
 }
 
 bool HookedSwitchSpellRequestCheck(void* input_state)
@@ -517,6 +588,16 @@ bool Initialize()
 {
     TryInstallHooks();
     return true;
+}
+
+void QueueSelectionFeedback(bool is_item)
+{
+    if (is_item) {
+        g_selection_feedback_item_pending = true;
+    } else {
+        g_selection_feedback_spell_pending = true;
+    }
+    PlayEquipmentChangeSound();
 }
 
 void SampleFrame()

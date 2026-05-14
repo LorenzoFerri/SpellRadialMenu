@@ -1,6 +1,7 @@
 #include "input/radial_input.h"
 
 #include "core/common.h"
+#include "game/input/radial_switch.h"
 #include "game/state/gameplay_state.h"
 #include "render/ui/radial_menu.h"
 
@@ -115,9 +116,13 @@ void ConfirmRadialSelection(RadialKind active_kind)
 
     const auto selected_index = static_cast<std::size_t>(selected_slot);
     if (active_kind == RadialKind::items) {
-        (void)SwitchToQuickItemSlot(g_open_radial_slots[selected_index].slot_index);
+        if (SwitchToQuickItemSlot(g_open_radial_slots[selected_index].slot_index)) {
+            radial_switch::QueueSelectionFeedback(true);
+        }
     } else {
-        (void)SwitchToSpellSlot(g_open_radial_slots[selected_index].slot_index);
+        if (SwitchToSpellSlot(g_open_radial_slots[selected_index].slot_index)) {
+            radial_switch::QueueSelectionFeedback(false);
+        }
     }
 }
 
