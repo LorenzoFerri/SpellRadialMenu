@@ -11,6 +11,7 @@ RadialMenu is an Elden Ring DLL mod that adds radial menus for spells and quick 
 - Select with the right stick and release the held D-pad direction to confirm.
 - Select with mouse movement while a D-pad radial is open.
 - Short D-pad taps pass through to the game, so vanilla cycling still works.
+- Radial confirms trigger the game's equipment click, HUD reveal, and icon flash feedback.
 - Spell and item names are resolved from the game's runtime message repository.
 - Spell/item icons are resolved from runtime params and loader-backed game/mod icon assets.
 - The UI font is embedded in the DLL; no loose font or texture files are required.
@@ -71,22 +72,27 @@ The mod writes `RadialMenu.log` next to `RadialMenu.dll`.
 Useful startup lines include:
 
 ```text
-Spell manager initialized ...
+Equipment HUD update hook installed ...
+SwitchSpell request-check hook installed ...
+SwitchItem request-check hook installed ...
 ChrCam input acceleration update hook installed ...
-Initialization completed.
-Command queue captured
-ImGui ready
+D3D12 hooks installed.
+Initialization completed ...
+Direct command queue captured.
+D3D12 overlay initialized ...
 ```
 
-`Icon loader ready ...` appears after gameplay is ready and icon assets are warmed, not necessarily at process startup.
+`Icon loader initialized.` appears after gameplay is ready and icon assets are available, not necessarily at process startup.
 
 For modded icon troubleshooting, useful lines include:
 
 ```text
-Asset reader: read icon asset through loader filesystem override.
-Asset reader: read icon asset through mounted game VFS.
-Icon loader: low/hi assets read ...
-Icon loader ready ...
+Asset reader: icon asset resolved through loader filesystem override.
+Asset reader: icon asset resolved through mounted game VFS.
+Asset reader: icon asset resolved through game VFS root mapping.
+Icon loader source read result: source=hi tpf=1 layout=1.
+Icon loader metadata ready ...
+Icon loader initialized.
 ```
 
 ## Building
@@ -171,7 +177,7 @@ src/render/ui/
 
 The DLL is loaded after game initialization. Startup installs MinHook, initializes game-data access, installs the asset reader hook, installs native input hooks, and installs D3D12 hooks.
 
-D-pad input is handled through the game's native input paths. Holds open a radial menu, right-stick or mouse movement selects a radial entry, and releasing the held D-pad direction confirms the selected spell or item. Camera input acceleration is captured for selection and cleared while a radial menu is open so the camera does not move. Spell and quick-item selection are direct game-memory writes; short D-pad taps pass through via the native slot writers.
+D-pad input is handled through the game's native input paths. Holds open a radial menu, right-stick or mouse movement selects a radial entry, and releasing the held D-pad direction confirms the selected spell or item. Camera input acceleration is captured for selection and cleared while a radial menu is open so the camera does not move. Radial confirms write the selected spell or quick-item slot directly, then queue the game's normal equipment HUD feedback so the click sound, HUD reveal, and icon flash still occur. Short D-pad taps replay the game's native switch request checks so vanilla cycling and auto-HUD behavior are preserved.
 
 Rendering is handled by hooking `IDXGISwapChain::Present` and `ID3D12CommandQueue::ExecuteCommandLists`. The command queue hook captures the real direct graphics queue. ImGui initializes lazily on the first suitable `Present` call. The overlay draws only while a radial menu is open.
 
