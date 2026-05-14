@@ -143,8 +143,8 @@ int GetCurrentSpellSlot()
 {
     const auto equip_magic_data = ResolveEquipMagicData();
     if (!equip_magic_data) return -1;
-    const int entry_slot = ResolveCurrentSpellEntrySlot(equip_magic_data);
-    if (entry_slot < 0) return -1;
+    std::int32_t entry_slot = -1;
+    if (!ReadSelectedSpellSlot(equip_magic_data, entry_slot)) return -1;
 
     if (g_cached_spells_valid && equip_magic_data == g_cached_spells_signature.equip_magic_data) {
         return DisplayIndexForSlot(g_cached_spells, static_cast<std::size_t>(entry_slot));
@@ -178,7 +178,8 @@ std::vector<RadialSlot> GetMemorizedSpells()
     }
     g_logged_no_equip_data = false;
 
-    const int current_entry = ResolveCurrentSpellEntrySlot(equip_magic_data);
+    std::int32_t current_entry = -1;
+    ReadSelectedSpellSlot(equip_magic_data, current_entry);
     if (g_cached_spells_valid && equip_magic_data == g_cached_spells_signature.equip_magic_data) {
         spells = g_cached_spells;
         if (current_entry >= 0) UpdateCurrentFlags(spells, static_cast<std::size_t>(current_entry));
@@ -245,8 +246,7 @@ int GetCurrentQuickItemSlot()
     if (!equip_item_data) return -1;
 
     std::int32_t slot = -1;
-    if (!ReadMemory(equip_item_data + kSelectedQuickItemSlotOffset, slot)) return -1;
-    if (slot < 0 || slot >= static_cast<int>(kMaxQuickItemSlots)) return -1;
+    if (!ReadSelectedQuickItemSlot(equip_item_data, slot)) return -1;
 
     if (g_cached_quick_items_valid && equip_item_data == g_cached_quick_items_signature.equip_item_data) {
         return DisplayIndexForSlot(g_cached_quick_items, static_cast<std::size_t>(slot));
@@ -277,7 +277,7 @@ std::vector<RadialSlot> GetQuickItems()
     }
 
     std::int32_t current_slot = -1;
-    ReadMemory(equip_item_data + kSelectedQuickItemSlotOffset, current_slot);
+    ReadSelectedQuickItemSlot(equip_item_data, current_slot);
     if (g_cached_quick_items_valid && equip_item_data == g_cached_quick_items_signature.equip_item_data) {
         items = g_cached_quick_items;
         if (current_slot >= 0) UpdateCurrentFlags(items, static_cast<std::size_t>(current_slot));

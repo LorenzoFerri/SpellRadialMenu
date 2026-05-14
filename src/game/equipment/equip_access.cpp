@@ -29,16 +29,22 @@ constexpr std::uintptr_t kInventoryEntryStride = 0x18;
 constexpr std::uintptr_t kInventoryEntryItemIdOffset = 0x04;
 
 std::uintptr_t g_game_data_man_address = 0;
+CachedReadableRegion g_game_data_man_region = {};
+CachedReadableRegion g_game_data_root_region = {};
+CachedReadableRegion g_equip_magic_data_region = {};
+CachedReadableRegion g_selected_spell_slot_region = {};
+CachedReadableRegion g_selected_quick_item_slot_region = {};
+CachedReadableRegion g_current_spell_id_region = {};
 
 std::uintptr_t ResolveGameDataRoot()
 {
     const auto gdm = ResolveGameDataManAddress();
     if (!gdm) return 0;
     std::uintptr_t manager = 0;
-    if (!ReadMemory(gdm, manager)) return 0;
+    if (!ReadCachedMemory(gdm, manager, g_game_data_man_region)) return 0;
     if (!manager) return 0;
     std::uintptr_t root = 0;
-    return ReadMemory(manager + kGameDataRootOffset, root) ? root : 0;
+    return ReadCachedMemory(manager + kGameDataRootOffset, root, g_game_data_root_region) ? root : 0;
 }
 
 std::uint32_t UnpackGoodsItemId(std::uint32_t packed_item_id)
@@ -81,7 +87,8 @@ std::uintptr_t ResolveEquipMagicData()
     const auto root = ResolveGameDataRoot();
     if (!root) return 0;
     std::uintptr_t equip_magic_data = 0;
-    return ReadMemory(root + kEquipMagicDataOffset, equip_magic_data) ? equip_magic_data : 0;
+    return ReadCachedMemory(root + kEquipMagicDataOffset, equip_magic_data, g_equip_magic_data_region) ?
+        equip_magic_data : 0;
 }
 
 std::uintptr_t ResolveEquipItemData()
@@ -90,15 +97,34 @@ std::uintptr_t ResolveEquipItemData()
     return root ? root + kEquipItemDataOffset : 0;
 }
 
+bool ReadSelectedSpellSlot(std::uintptr_t equip_magic_data, std::int32_t& slot)
+{
+    slot = -1;
+    if (!equip_magic_data || !ReadCachedMemory(equip_magic_data + kSelectedSpellSlotOffset, slot,
+        g_selected_spell_slot_region)) {
+        return false;
+    }
+    return slot >= 0 && slot < static_cast<int>(kMaxSpellSlots);
+}
+
+bool ReadSelectedQuickItemSlot(std::uintptr_t equip_item_data, std::int32_t& slot)
+{
+    slot = -1;
+    if (!equip_item_data || !ReadCachedMemory(equip_item_data + kSelectedQuickItemSlotOffset, slot,
+        g_selected_quick_item_slot_region)) {
+        return false;
+    }
+    return slot >= 0 && slot < static_cast<int>(kMaxQuickItemSlots);
+}
+
 int ResolveCurrentSpellEntrySlot(std::uintptr_t equip_magic_data)
 {
     std::int32_t slot = -1;
-    if (!ReadMemory(equip_magic_data + kSelectedSpellSlotOffset, slot)) return -1;
-    if (slot < 0 || slot >= static_cast<int>(kMaxSpellSlots)) return -1;
+    if (!ReadSelectedSpellSlot(equip_magic_data, slot)) return -1;
 
     const auto entry = equip_magic_data + kFirstMagicSlotOffset + static_cast<std::size_t>(slot) * kSpellEntryStride;
     std::uint32_t spell_id = 0;
-    if (!ReadMemory(entry + kSpellIdOffset, spell_id)) return -1;
+    if (!ReadCachedMemory(entry + kSpellIdOffset, spell_id, g_current_spell_id_region)) return -1;
     return (spell_id == 0 || spell_id == 0xFFFFFFFFu) ? -1 : slot;
 }
 

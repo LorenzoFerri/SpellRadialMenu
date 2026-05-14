@@ -34,6 +34,8 @@ bool ReadMemory(std::uintptr_t address, T& value)
 std::uintptr_t ResolveGameDataManAddress();
 std::uintptr_t ResolveEquipMagicData();
 std::uintptr_t ResolveEquipItemData();
+bool ReadSelectedSpellSlot(std::uintptr_t equip_magic_data, std::int32_t& slot);
+bool ReadSelectedQuickItemSlot(std::uintptr_t equip_item_data, std::int32_t& slot);
 int ResolveCurrentSpellEntrySlot(std::uintptr_t equip_magic_data);
 bool ReadQuickItemInventorySnapshot(std::uintptr_t equip_item_data, QuickItemInventorySnapshot& snapshot);
 std::uint32_t ReadQuickItemId(std::uintptr_t equip_item_data, std::size_t slot);

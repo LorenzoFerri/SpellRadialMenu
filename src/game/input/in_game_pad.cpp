@@ -52,6 +52,7 @@ struct CachedMappedInput {
     std::int32_t mapped_input = -1;
     std::uintptr_t code_state_address = 0;
     std::int32_t virtual_input_index = -1;
+    CachedReadableRegion code_state_region = {};
 };
 
 struct CachedInput {
@@ -64,12 +65,17 @@ struct CachedInput {
     std::uintptr_t virtual_input_index_tree = 0;
     CachedMappedInput mappings[4] = {};
     std::size_t mapping_count = 0;
+    CachedReadableRegion allow_polling_region = {};
+    CachedReadableRegion input_devices_region = {};
+    CachedReadableRegion bitset_region = {};
+    CachedReadableRegion bitset_data_region = {};
     ULONGLONG last_poll_ms = 0;
     bool last_value = false;
     bool valid = false;
 };
 
 std::uintptr_t g_cached_in_game_pad = 0;
+CachedReadableRegion g_cached_pad_vtable_region = {};
 CachedInput g_cached_inputs[8] = {};
 
 template <typename T>
@@ -204,12 +210,13 @@ bool ResolveInGamePad(std::uintptr_t& in_game_pad)
     return false;
 }
 
-bool ReadVirtualDigitalInput(std::uintptr_t input_devices, std::int32_t virtual_input_index)
+bool ReadVirtualDigitalInput(CachedInput& cached, std::int32_t virtual_input_index)
 {
     if (virtual_input_index < 0) return false;
 
     std::uintptr_t virtual_multi_device = 0;
-    if (!ReadGameMemory(input_devices + kInputDevicesVirtualMultiDeviceOffset, virtual_multi_device) ||
+    if (!ReadCachedMemory(cached.input_devices + kInputDevicesVirtualMultiDeviceOffset, virtual_multi_device,
+        cached.input_devices_region) ||
         !virtual_multi_device) {
         return false;
     }
@@ -219,8 +226,8 @@ bool ReadVirtualDigitalInput(std::uintptr_t input_devices, std::int32_t virtual_
 
     std::uintptr_t integer_count = 0;
     std::uintptr_t bitset_data = 0;
-    if (!ReadGameMemory(bitset + kDynamicBitsetIntegerCountOffset, integer_count) ||
-        !ReadGameMemory(bitset + kDynamicBitsetDataOffset, bitset_data) || !bitset_data) {
+    if (!ReadCachedMemory(bitset + kDynamicBitsetIntegerCountOffset, integer_count, cached.bitset_region) ||
+        !ReadCachedMemory(bitset + kDynamicBitsetDataOffset, bitset_data, cached.bitset_region) || !bitset_data) {
         return false;
     }
 
@@ -228,7 +235,7 @@ bool ReadVirtualDigitalInput(std::uintptr_t input_devices, std::int32_t virtual_
     if (row_index >= integer_count) return false;
 
     std::uint32_t row = 0;
-    if (!ReadGameMemory(bitset_data + row_index * sizeof(row), row)) return false;
+    if (!ReadCachedMemory(bitset_data + row_index * sizeof(row), row, cached.bitset_data_region)) return false;
     return ((row >> (virtual_input_index & 31)) & 1u) != 0;
 }
 
@@ -285,13 +292,16 @@ bool BuildInputCache(std::int32_t input, std::uintptr_t pad, CachedInput& cached
     return cached.valid;
 }
 
-bool ReadCachedInputState(const CachedInput& cached)
+bool ReadCachedInputState(CachedInput& cached)
 {
     for (std::size_t i = 0; i < cached.mapping_count; ++i) {
-        const auto& mapping = cached.mappings[i];
+        auto& mapping = cached.mappings[i];
         InputCodeState code_state = {};
-        if (!ReadGameMemory(mapping.code_state_address, code_state) || !code_state.state_1 || code_state.state_2) continue;
-        if (ReadVirtualDigitalInput(cached.input_devices, mapping.virtual_input_index)) return true;
+        if (!ReadCachedMemory(mapping.code_state_address, code_state, mapping.code_state_region) ||
+            !code_state.state_1 || code_state.state_2) {
+            continue;
+        }
+        if (ReadVirtualDigitalInput(cached, mapping.virtual_input_index)) return true;
     }
 
     return false;
@@ -304,9 +314,10 @@ bool ValidateCachedPad(std::uintptr_t& pad)
 
     std::uintptr_t vtable = 0;
     const auto module_base = GetModuleBase();
-    if (!ReadGameMemory(pad, vtable) || vtable < module_base ||
+    if (!ReadCachedMemory(pad, vtable, g_cached_pad_vtable_region) || vtable < module_base ||
         static_cast<std::uint32_t>(vtable - module_base) != kInGamePadUserInputVtableRva) {
         g_cached_in_game_pad = 0;
+        g_cached_pad_vtable_region.Reset();
         pad = 0;
         return false;
     }
@@ -355,11 +366,15 @@ bool PollInputIfCached(std::int32_t input)
     std::uintptr_t pad = 0;
     if (!ValidateCachedPad(pad)) return false;
 
-    bool allow_polling = false;
-    if (!ReadGameMemory(pad + kPadAllowPollingOffset, allow_polling) || !allow_polling) return false;
-
-    for (const auto& cached : g_cached_inputs) {
-        if (cached.valid && cached.input == input && cached.pad == pad) return ReadCachedInputState(cached);
+    for (auto& cached : g_cached_inputs) {
+        if (cached.valid && cached.input == input && cached.pad == pad) {
+            bool allow_polling = false;
+            if (!ReadCachedMemory(pad + kPadAllowPollingOffset, allow_polling, cached.allow_polling_region) ||
+                !allow_polling) {
+                return false;
+            }
+            return ReadCachedInputState(cached);
+        }
     }
     return false;
 }
@@ -378,6 +393,7 @@ bool IsInputCached(std::int32_t input)
 void InvalidateCaches()
 {
     g_cached_in_game_pad = 0;
+    g_cached_pad_vtable_region.Reset();
     for (auto& cached : g_cached_inputs) {
         cached = {};
     }

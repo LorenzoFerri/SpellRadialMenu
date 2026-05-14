@@ -18,7 +18,6 @@
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <cstddef>
 #include <vector>
@@ -58,16 +57,12 @@ static UINT                        g_gameplay_ready_frame_count = 0;
 static bool                        g_invalidate_slots_after_gameplay_return = false;
 static bool                        g_logged_icon_vfs_unavailable = false;
 static ULONGLONG                   g_next_icon_init_attempt_ms = 0;
-static int                         g_icon_prewarm_phase = 0;
-static bool                        g_logged_icon_prewarm_complete = false;
 static bool                        g_refreshed_open_icon_atlases = false;
-static std::vector<std::uint32_t>  g_icon_prewarm_ids;
 static ULONGLONG                   g_last_slow_asset_install_log_ms = 0;
 static ULONGLONG                   g_last_slow_gameplay_state_log_ms = 0;
 static ULONGLONG                   g_last_slow_native_input_log_ms = 0;
 static ULONGLONG                   g_last_slow_icon_init_log_ms = 0;
 static ULONGLONG                   g_last_slow_icon_refresh_log_ms = 0;
-static ULONGLONG                   g_last_slow_icon_prewarm_log_ms = 0;
 static ULONGLONG                   g_last_slow_render_log_ms = 0;
 
 static HWND    g_hwnd        = nullptr;
@@ -174,44 +169,6 @@ static bool RefreshRequiredIconAtlasesForSlots(const std::vector<RadialSlot>& sl
     return complete;
 }
 
-static void AddPrewarmSlotIcons(const std::vector<RadialSlot>& slots)
-{
-    for (const RadialSlot& slot : slots) {
-        if (slot.icon_id == 0) continue;
-        if (std::find(g_icon_prewarm_ids.begin(), g_icon_prewarm_ids.end(), slot.icon_id) == g_icon_prewarm_ids.end()) {
-            g_icon_prewarm_ids.push_back(slot.icon_id);
-        }
-    }
-}
-
-static void ResetIconPrewarm()
-{
-    g_icon_prewarm_phase = 0;
-    g_logged_icon_prewarm_complete = false;
-    g_icon_prewarm_ids.clear();
-}
-
-static void PrewarmRadialIcons()
-{
-    if (!g_icons_ready || radial_menu::IsOpen() || g_icon_prewarm_phase >= 3) return;
-
-    const ULONGLONG start = TimingStart();
-    if (g_icon_prewarm_phase == 0) {
-        AddPrewarmSlotIcons(GetMemorizedSpells());
-        g_icon_prewarm_phase = 1;
-    } else if (g_icon_prewarm_phase == 1) {
-        AddPrewarmSlotIcons(GetQuickItems());
-        g_icon_prewarm_phase = 2;
-    } else if (icon_loader::PreloadIcons(g_icon_prewarm_ids, 1)) {
-        g_icon_prewarm_phase = 3;
-        if (!g_logged_icon_prewarm_complete) {
-            Log("Icon loader radial prewarm complete (icons=%zu).", g_icon_prewarm_ids.size());
-            g_logged_icon_prewarm_complete = true;
-        }
-    }
-    LogSlowDuration("PrewarmRadialIcons", start, 16, g_last_slow_icon_prewarm_log_ms);
-}
-
 static void WaitForQueueIdle()
 {
     if (!g_device || !g_queue) return;
@@ -278,7 +235,6 @@ static void ReleaseOverlayResources(const char* reason)
     g_buf_count = 0;
     g_rtv_stride = 0;
     g_next_icon_init_attempt_ms = 0;
-    ResetIconPrewarm();
     g_refreshed_open_icon_atlases = false;
     g_gameplay_ready_last_frame = false;
     g_gameplay_ready_frame_count = 0;
@@ -288,7 +244,6 @@ static void ReleaseOverlayResources(const char* reason)
     g_last_slow_native_input_log_ms = 0;
     g_last_slow_icon_init_log_ms = 0;
     g_last_slow_icon_refresh_log_ms = 0;
-    g_last_slow_icon_prewarm_log_ms = 0;
     g_last_slow_render_log_ms = 0;
     g_last_fullscreen_swap_chain = nullptr;
     g_has_last_fullscreen_request = false;
@@ -483,7 +438,6 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
         }
         if (g_icons_ready && !radial_open && g_gameplay_ready_frame_count > 1) {
             g_refreshed_open_icon_atlases = false;
-            if (g_icon_prewarm_phase < 3) PrewarmRadialIcons();
         }
     }
 
