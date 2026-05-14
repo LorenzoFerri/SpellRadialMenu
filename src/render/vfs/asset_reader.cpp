@@ -40,7 +40,6 @@ std::mutex g_cache_mutex;
 std::unordered_map<void*, std::wstring> g_pending_reads;
 std::unordered_map<std::wstring, std::vector<std::uint8_t>> g_cached_files;
 std::vector<VirtualRootPath> g_virtual_roots;
-std::size_t g_virtual_root_slot_count = 0;
 bool g_logged_virtual_mounts = false;
 bool g_logged_memory_root_read = false;
 bool g_logged_system_root_read = false;
@@ -50,8 +49,39 @@ bool g_logged_loader_filesystem_miss = false;
 bool g_logged_mounted_vfs_attempt = false;
 bool g_logged_mounted_vfs_read = false;
 bool g_logged_game_read_context = false;
+bool g_logged_icon_resolution_diagnostics = false;
 
 bool IsIconAssetPath(const std::wstring& path);
+
+std::string NarrowPath(const std::wstring& path)
+{
+    if (path.empty()) return {};
+    const int required = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (required <= 1) return {};
+
+    std::string result(static_cast<std::size_t>(required), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, result.data(), required, nullptr, nullptr);
+    result.pop_back();
+    return result;
+}
+
+std::wstring CanonicalVirtualRoot(std::wstring root)
+{
+    root = NormalizePath(root.c_str());
+    while (!root.empty() && root.back() == L'/') root.pop_back();
+    if (!root.empty() && root.back() == L':') root.pop_back();
+    return root;
+}
+
+bool SplitVirtualPath(const std::wstring& path, std::wstring& root, std::wstring& relative)
+{
+    const std::size_t root_end = path.find(L":/");
+    if (root_end == std::wstring::npos) return false;
+
+    root = CanonicalVirtualRoot(path.substr(0, root_end));
+    relative = path.substr(root_end + 2);
+    return !root.empty() && !relative.empty();
+}
 
 bool Data0IconPathToRelativePath(const wchar_t* path, std::wstring& relative)
 {
@@ -93,19 +123,27 @@ bool ReadThroughLoaderFilesystem(const wchar_t* path, std::vector<std::uint8_t>&
 void CaptureVirtualRoots(const DlDeviceManager2015& manager)
 {
     const std::size_t count = VectorLen(manager.virtual_roots);
-    if (count <= g_virtual_root_slot_count) return;
     if (count == 0 || !IsReadableMemory(manager.virtual_roots.first, count * sizeof(DlVirtualRoot))) return;
 
-    g_virtual_root_slot_count = count;
-    g_virtual_roots.clear();
-    g_virtual_roots.reserve(count);
+    std::vector<VirtualRootPath> roots;
+    roots.reserve(count);
     for (const DlVirtualRoot* it = manager.virtual_roots.first; it != manager.virtual_roots.last; ++it) {
         std::wstring root = NormalizePath(ReadDlString(it->root).c_str());
         std::wstring expanded = ReadDlString(it->expanded);
         if (root.empty() || expanded.empty()) continue;
-        g_virtual_roots.push_back({std::move(root), std::move(expanded)});
+        roots.push_back({std::move(root), std::move(expanded)});
     }
 
+    if (roots.empty()) return;
+
+    const bool changed = roots.size() != g_virtual_roots.size() ||
+        !std::equal(roots.begin(), roots.end(), g_virtual_roots.begin(),
+            [](const VirtualRootPath& lhs, const VirtualRootPath& rhs) {
+                return lhs.root == rhs.root && lhs.expanded == rhs.expanded;
+            });
+    if (!changed) return;
+
+    g_virtual_roots = std::move(roots);
     Log("Asset reader: captured %zu game VFS virtual roots.", g_virtual_roots.size());
 }
 
@@ -133,11 +171,14 @@ void LogMountedRoots(const DlDeviceManager2015& manager)
 bool ReadFromMemoryVirtualRoot(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64_t max_size)
 {
     const std::wstring normalized_path = NormalizePath(path);
-    for (const VirtualRootPath& root : g_virtual_roots) {
-        if (!StartsWithPath(normalized_path, root.root)) continue;
+    std::wstring path_root;
+    std::wstring relative;
+    if (!SplitVirtualPath(normalized_path, path_root, relative)) return false;
 
-        std::wstring relative = normalized_path.substr(root.root.size());
-        const std::wstring disk_path = JoinDiskPath(root.expanded, std::move(relative));
+    for (const VirtualRootPath& root : g_virtual_roots) {
+        if (CanonicalVirtualRoot(root.root) != path_root) continue;
+
+        const std::wstring disk_path = JoinDiskPath(root.expanded, relative);
         if (ReadDiskFile(disk_path, bytes, max_size)) {
             if (!g_logged_memory_root_read) Log("Asset reader: icon asset resolved through game VFS root mapping.");
             g_logged_memory_root_read = true;
@@ -285,9 +326,9 @@ bool ReadOpenedFile(void* file_operator, std::vector<std::uint8_t>& bytes, std::
 
 DlDevice* FindMountedVfsDevice(const std::wstring& path)
 {
-    const std::size_t root_end = path.find(L":/");
-    if (root_end == std::wstring::npos) return nullptr;
-    const std::wstring root = path.substr(0, root_end);
+    std::wstring root;
+    std::wstring relative;
+    if (!SplitVirtualPath(path, root, relative)) return nullptr;
 
     const DlDeviceManager2015* manager = LocateDeviceManager();
     if (!manager) return nullptr;
@@ -296,7 +337,7 @@ DlDevice* FindMountedVfsDevice(const std::wstring& path)
     if (count == 0 || !IsReadableMemory(manager->bnd4_mounts.first, count * sizeof(DlVirtualMount))) return nullptr;
 
     for (const DlVirtualMount* it = manager->bnd4_mounts.first; it != manager->bnd4_mounts.last; ++it) {
-        if (NormalizePath(ReadDlString(it->root).c_str()) != root) continue;
+        if (CanonicalVirtualRoot(ReadDlString(it->root)) != root) continue;
         if (!it->device || !IsReadableMemory(it->device, sizeof(DlDevice))) return nullptr;
         if (!it->device->vtable || !IsReadableMemory(it->device->vtable, sizeof(DlDeviceVtable))) return nullptr;
         if (!IsExecutableAddress(reinterpret_cast<std::uintptr_t>(it->device->vtable->open_file))) return nullptr;
@@ -335,6 +376,50 @@ bool ReadFileFromMountedVfs(const wchar_t* path, std::vector<std::uint8_t>& byte
     if (!g_logged_mounted_vfs_read) Log("Asset reader: icon asset resolved through mounted game VFS.");
     g_logged_mounted_vfs_read = true;
     return true;
+}
+
+void LogIconResolutionDiagnostics(const std::wstring& normalized_path)
+{
+    if (g_logged_icon_resolution_diagnostics || g_virtual_roots.empty()) return;
+    g_logged_icon_resolution_diagnostics = true;
+
+    const DlDeviceManager2015* manager = LocateDeviceManager();
+    const std::size_t mount_count = manager ? VectorLen(manager->bnd4_mounts) : 0;
+    Log("Asset reader: icon read unresolved for '%s' (virtual_roots=%zu bnd4_mounts=%zu read_context=%d).",
+        NarrowPath(normalized_path).c_str(),
+        g_virtual_roots.size(),
+        mount_count,
+        (g_captured_container && g_captured_allocator) ? 1 : 0);
+
+    bool logged_relevant_root = false;
+    for (const VirtualRootPath& root : g_virtual_roots) {
+        const std::wstring canonical = CanonicalVirtualRoot(root.root);
+        if (canonical != L"data0" && canonical != L"system") continue;
+
+        Log("Asset reader: virtual root '%s' expands to '%s'.",
+            NarrowPath(root.root).c_str(),
+            NarrowPath(root.expanded).c_str());
+        logged_relevant_root = true;
+    }
+    if (!logged_relevant_root) Log("Asset reader: no data0/system virtual roots were captured.");
+
+    if (!manager || mount_count == 0) return;
+    if (!IsReadableMemory(manager->bnd4_mounts.first, mount_count * sizeof(DlVirtualMount))) {
+        Log("Asset reader: bnd4 mount table is not readable for icon diagnostics.");
+        return;
+    }
+
+    bool logged_data_mount = false;
+    for (const DlVirtualMount* it = manager->bnd4_mounts.first; it != manager->bnd4_mounts.last; ++it) {
+        const std::wstring root = ReadDlString(it->root);
+        if (CanonicalVirtualRoot(root) != L"data0") continue;
+
+        Log("Asset reader: bnd4 data0 mount root='%s' device=%p.",
+            NarrowPath(root).c_str(),
+            static_cast<void*>(it->device));
+        logged_data_mount = true;
+    }
+    if (!logged_data_mount) Log("Asset reader: no bnd4 data0 mount was found.");
 }
 
 bool ReadFileDirect(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64_t max_size)
@@ -388,6 +473,7 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
 {
     bytes.clear();
     if (!path) return false;
+    const std::wstring normalized_path = NormalizePath(path);
     if (TryGetCachedFile(path, bytes)) return true;
     RefreshVirtualRoots();
     if (ReadFromMemoryVirtualRoot(path, bytes, max_size)) return true;
@@ -397,6 +483,7 @@ bool ReadFile(const wchar_t* path, std::vector<std::uint8_t>& bytes, std::uint64
     if (!AllowsDirectRead(path)) return false;
     if (ReadFileDirect(path, bytes, max_size)) return true;
 
+    if (IsIconAssetPath(normalized_path)) LogIconResolutionDiagnostics(normalized_path);
     if (g_open_file_target) g_logged_waiting_for_cache = true;
     return false;
 }
@@ -471,11 +558,11 @@ void Shutdown()
     g_logged_memory_root_read = false;
     g_logged_system_root_read = false;
     g_logged_memory_root_miss = false;
+    g_logged_icon_resolution_diagnostics = false;
     std::lock_guard lock(g_cache_mutex);
     g_pending_reads.clear();
     g_cached_files.clear();
     g_virtual_roots.clear();
-    g_virtual_root_slot_count = 0;
 }
 
 }  // namespace radial_menu_mod::asset_reader
