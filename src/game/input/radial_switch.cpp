@@ -23,8 +23,6 @@ constexpr std::uintptr_t kSwitchSpellRepeatCheckRva = 0x758920;
 constexpr std::uintptr_t kCanSwitchSpellRva = 0x250850;
 constexpr std::uintptr_t kSwitchItemNextRva = 0x24FED0;
 constexpr std::uintptr_t kSwitchSpellNextRva = 0x250E60;
-constexpr std::uintptr_t kEquipmentChangeSoundEventRva = 0x814FC0;
-constexpr std::uintptr_t kEquipmentChangeSoundEventVtableRva = 0x2A9DBD0;
 
 constexpr std::int32_t kSwitchSpell2Input = 24;
 constexpr std::int32_t kSwitchItem2Input = 25;
@@ -32,20 +30,13 @@ constexpr std::int32_t kSwitchSpellAction = 13;
 constexpr std::int32_t kSwitchItemAction = 14;
 constexpr DWORD kRadialHoldThresholdMs = 220;
 constexpr DWORD kNativeActionReleaseGraceMs = 120;
-
-struct EquipmentChangeSoundEvent {
-    std::int32_t event_id = 0x2710;
-    std::int32_t target = -1;
-    std::int32_t category = 3;
-    std::int32_t padding = 0;
-    void* vtable = nullptr;
-};
+constexpr std::uintptr_t kHudSpellVisibleOffset = 0x4D;
 
 struct CaptureState {
     bool input_down = false;
     bool capture_active = false;
     bool radial_started = false;
-    bool tap_feedback_pending = false;
+    int native_request_replay_count = 0;
     ULONGLONG pressed_ms = 0;
     ULONGLONG last_seen_ms = 0;
 };
@@ -56,7 +47,6 @@ using InputHoldCheckFn = bool (*)(void* input_state, std::int32_t action);
 using CanSwitchSpellFn = bool (*)(void* equip_magic_data);
 using SwitchSpellNextFn = void (*)(void* equip_magic_data);
 using SwitchItemNextFn = void (*)(void* equip_item_data);
-using EquipmentChangeSoundEventFn = void (*)(EquipmentChangeSoundEvent* event);
 
 CaptureState g_spell_capture = {};
 CaptureState g_item_capture = {};
@@ -83,6 +73,9 @@ bool g_hook_installation_complete = false;
 int g_input_cache_warm_phase = 0;
 bool g_input_cache_warmed = false;
 bool g_was_normal_gameplay = false;
+bool g_spell_hud_visible = true;
+CachedReadableRegion g_equipment_hud_context_region = {};
+CachedReadableRegion g_spell_hud_visible_region = {};
 
 bool g_logged_switch_spell_request_suppression = false;
 bool g_logged_switch_item_request_suppression = false;
@@ -105,17 +98,6 @@ InputRequestCheckFn g_original_switch_item_repeat_check = nullptr;
 CanSwitchSpellFn g_original_can_switch_spell = nullptr;
 SwitchSpellNextFn g_original_switch_spell_next = nullptr;
 SwitchItemNextFn g_original_switch_item_next = nullptr;
-EquipmentChangeSoundEventFn g_equipment_change_sound_event = nullptr;
-void* g_equipment_change_sound_event_vtable = nullptr;
-bool g_searched_equipment_change_sound_event = false;
-
-template <typename T>
-bool WriteGameMemory(std::uintptr_t address, const T& value)
-{
-    if (!IsReadableMemory(reinterpret_cast<const void*>(address), sizeof(T))) return false;
-    *reinterpret_cast<T*>(address) = value;
-    return true;
-}
 
 void BeginCapture(CaptureState& capture)
 {
@@ -133,6 +115,7 @@ void ResetCapture(CaptureState& capture)
     capture.input_down = false;
     capture.capture_active = false;
     capture.radial_started = false;
+    capture.native_request_replay_count = 0;
     capture.pressed_ms = 0;
     capture.last_seen_ms = 0;
 }
@@ -181,39 +164,16 @@ bool ShouldSuppressItemSwitch(void* equip_item_data)
         reinterpret_cast<std::uintptr_t>(equip_item_data) == current_equip_item_data;
 }
 
-void PlayEquipmentChangeSound()
-{
-    if (!g_searched_equipment_change_sound_event) {
-        g_searched_equipment_change_sound_event = true;
-        const auto function_address = GetModuleBase() + kEquipmentChangeSoundEventRva;
-        const auto vtable_address = GetModuleBase() + kEquipmentChangeSoundEventVtableRva;
-        if (IsReadableMemory(reinterpret_cast<const void*>(function_address), 1) &&
-            IsReadableMemory(reinterpret_cast<const void*>(vtable_address), sizeof(void*))) {
-            g_equipment_change_sound_event = reinterpret_cast<EquipmentChangeSoundEventFn>(function_address);
-            g_equipment_change_sound_event_vtable = reinterpret_cast<void*>(vtable_address);
-        }
-    }
-    if (g_equipment_change_sound_event == nullptr || g_equipment_change_sound_event_vtable == nullptr) return;
-
-    EquipmentChangeSoundEvent event = {};
-    event.vtable = g_equipment_change_sound_event_vtable;
-    g_equipment_change_sound_event(&event);
-}
-
 void HookedEquipmentHudUpdate(void* hud_context, void* arg2, void* arg3)
 {
     if (g_original_equipment_hud_update != nullptr) g_original_equipment_hud_update(hud_context, arg2, arg3);
     if (hud_context == nullptr) return;
 
-    const std::uint8_t feedback_state = 1;
-    if (g_spell_capture.tap_feedback_pending &&
-        WriteGameMemory(reinterpret_cast<std::uintptr_t>(hud_context) + 0x09, feedback_state)) {
-        g_spell_capture.tap_feedback_pending = false;
-    }
-
-    if (g_item_capture.tap_feedback_pending &&
-        WriteGameMemory(reinterpret_cast<std::uintptr_t>(hud_context) + 0x08, feedback_state)) {
-        g_item_capture.tap_feedback_pending = false;
+    std::uintptr_t hud_state = 0;
+    std::uint8_t spell_visible = 0;
+    if (ReadCachedMemory(reinterpret_cast<std::uintptr_t>(hud_context), hud_state, g_equipment_hud_context_region) &&
+        hud_state && ReadCachedMemory(hud_state + kHudSpellVisibleOffset, spell_visible, g_spell_hud_visible_region)) {
+        g_spell_hud_visible = spell_visible != 0;
     }
 }
 
@@ -222,6 +182,10 @@ bool HookedSwitchSpellRequestCheck(void* input_state)
     const bool requested = g_original_switch_spell_request_check != nullptr ?
         g_original_switch_spell_request_check(input_state) : false;
     const bool can_capture = gameplay_state::GetCachedNormalGameplayHudState();
+    if (can_capture && g_spell_capture.native_request_replay_count > 0) {
+        --g_spell_capture.native_request_replay_count;
+        return true;
+    }
     if (requested && can_capture) BeginCapture(g_spell_capture);
     if (can_capture && (requested || IsCaptureActive(g_spell_capture))) {
         if (!g_logged_switch_spell_request_suppression) {
@@ -239,6 +203,10 @@ bool HookedSwitchItemRequestCheck(void* input_state)
     const bool requested = g_original_switch_item_request_check != nullptr ?
         g_original_switch_item_request_check(input_state) : false;
     const bool can_capture = gameplay_state::GetCachedNormalGameplayHudState();
+    if (can_capture && g_item_capture.native_request_replay_count > 0) {
+        --g_item_capture.native_request_replay_count;
+        return true;
+    }
     if (requested && can_capture) BeginCapture(g_item_capture);
     if (can_capture && (requested || IsCaptureActive(g_item_capture))) {
         if (!g_logged_switch_item_request_suppression) {
@@ -357,34 +325,21 @@ void HookedSwitchItemNext(void* equip_item_data)
 
 void PassThroughShortSwitchSpellTap()
 {
-    if (g_original_switch_spell_next == nullptr) return;
-
-    const auto equip_magic_data = equip_access::ResolveEquipMagicData();
-    if (!equip_magic_data) return;
-
     if (!g_logged_switch_spell_tap_passthrough) {
         g_logged_switch_spell_tap_passthrough = true;
-        Log("Passing through short SwitchSpell tap via selected-slot writer.");
+        Log("Passing through short SwitchSpell tap via native request replay.");
     }
-    g_spell_capture.tap_feedback_pending = true;
-    g_original_switch_spell_next(reinterpret_cast<void*>(equip_magic_data));
-    PlayEquipmentChangeSound();
+    // The game checks spell requests twice per HUD update: first wakes HUD, second cycles the slot.
+    g_spell_capture.native_request_replay_count = g_spell_hud_visible ? 2 : 1;
 }
 
 void PassThroughShortSwitchItemTap()
 {
-    if (g_original_switch_item_next == nullptr) return;
-
-    const auto equip_item_data = equip_access::ResolveEquipItemData();
-    if (!equip_item_data) return;
-
     if (!g_logged_switch_item_tap_passthrough) {
         g_logged_switch_item_tap_passthrough = true;
-        Log("Passing through short SwitchItem tap via selected-slot writer.");
+        Log("Passing through short SwitchItem tap via native request replay.");
     }
-    g_item_capture.tap_feedback_pending = true;
-    g_original_switch_item_next(reinterpret_cast<void*>(equip_item_data));
-    PlayEquipmentChangeSound();
+    g_item_capture.native_request_replay_count = 1;
 }
 
 void UpdateSpellRadialState(float selection_x, float selection_y)
@@ -461,6 +416,7 @@ void UpdateRadialInputStates()
 
     if (!g_was_normal_gameplay) {
         g_was_normal_gameplay = true;
+        g_spell_hud_visible = true;
         if (g_input_cache_warmed &&
             (!in_game_pad::IsInputCached(kSwitchSpell2Input) || !in_game_pad::IsInputCached(kSwitchItem2Input))) {
             g_input_cache_warm_phase = 0;
