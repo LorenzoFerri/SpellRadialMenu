@@ -82,6 +82,7 @@ bool g_switch_item_next_hook_failed = false;
 bool g_hook_installation_complete = false;
 int g_input_cache_warm_phase = 0;
 bool g_input_cache_warmed = false;
+bool g_was_normal_gameplay = false;
 
 bool g_logged_switch_spell_request_suppression = false;
 bool g_logged_switch_item_request_suppression = false;
@@ -104,6 +105,9 @@ InputRequestCheckFn g_original_switch_item_repeat_check = nullptr;
 CanSwitchSpellFn g_original_can_switch_spell = nullptr;
 SwitchSpellNextFn g_original_switch_spell_next = nullptr;
 SwitchItemNextFn g_original_switch_item_next = nullptr;
+EquipmentChangeSoundEventFn g_equipment_change_sound_event = nullptr;
+void* g_equipment_change_sound_event_vtable = nullptr;
+bool g_searched_equipment_change_sound_event = false;
 
 template <typename T>
 bool WriteGameMemory(std::uintptr_t address, const T& value)
@@ -179,17 +183,21 @@ bool ShouldSuppressItemSwitch(void* equip_item_data)
 
 void PlayEquipmentChangeSound()
 {
-    const auto function_address = GetModuleBase() + kEquipmentChangeSoundEventRva;
-    const auto vtable_address = GetModuleBase() + kEquipmentChangeSoundEventVtableRva;
-    if (!IsReadableMemory(reinterpret_cast<const void*>(function_address), 1) ||
-        !IsReadableMemory(reinterpret_cast<const void*>(vtable_address), sizeof(void*))) {
-        return;
+    if (!g_searched_equipment_change_sound_event) {
+        g_searched_equipment_change_sound_event = true;
+        const auto function_address = GetModuleBase() + kEquipmentChangeSoundEventRva;
+        const auto vtable_address = GetModuleBase() + kEquipmentChangeSoundEventVtableRva;
+        if (IsReadableMemory(reinterpret_cast<const void*>(function_address), 1) &&
+            IsReadableMemory(reinterpret_cast<const void*>(vtable_address), sizeof(void*))) {
+            g_equipment_change_sound_event = reinterpret_cast<EquipmentChangeSoundEventFn>(function_address);
+            g_equipment_change_sound_event_vtable = reinterpret_cast<void*>(vtable_address);
+        }
     }
+    if (g_equipment_change_sound_event == nullptr || g_equipment_change_sound_event_vtable == nullptr) return;
 
     EquipmentChangeSoundEvent event = {};
-    event.vtable = reinterpret_cast<void*>(vtable_address);
-    const auto play_event = reinterpret_cast<EquipmentChangeSoundEventFn>(function_address);
-    play_event(&event);
+    event.vtable = g_equipment_change_sound_event_vtable;
+    g_equipment_change_sound_event(&event);
 }
 
 void HookedEquipmentHudUpdate(void* hud_context, void* arg2, void* arg3)
@@ -213,8 +221,9 @@ bool HookedSwitchSpellRequestCheck(void* input_state)
 {
     const bool requested = g_original_switch_spell_request_check != nullptr ?
         g_original_switch_spell_request_check(input_state) : false;
-    if (requested) BeginCapture(g_spell_capture);
-    if (requested || IsCaptureActive(g_spell_capture)) {
+    const bool can_capture = gameplay_state::GetCachedNormalGameplayHudState();
+    if (requested && can_capture) BeginCapture(g_spell_capture);
+    if (can_capture && (requested || IsCaptureActive(g_spell_capture))) {
         if (!g_logged_switch_spell_request_suppression) {
             g_logged_switch_spell_request_suppression = true;
             Log("Suppressed SwitchSpell request check for radial capture.");
@@ -229,8 +238,9 @@ bool HookedSwitchItemRequestCheck(void* input_state)
 {
     const bool requested = g_original_switch_item_request_check != nullptr ?
         g_original_switch_item_request_check(input_state) : false;
-    if (requested) BeginCapture(g_item_capture);
-    if (requested || IsCaptureActive(g_item_capture)) {
+    const bool can_capture = gameplay_state::GetCachedNormalGameplayHudState();
+    if (requested && can_capture) BeginCapture(g_item_capture);
+    if (can_capture && (requested || IsCaptureActive(g_item_capture))) {
         if (!g_logged_switch_item_request_suppression) {
             g_logged_switch_item_request_suppression = true;
             Log("Suppressed SwitchItem request check for radial capture.");
@@ -250,8 +260,9 @@ bool HookedSwitchHoldCheck(void* input_state, std::int32_t action)
     const bool requested = g_original_switch_hold_check != nullptr ?
         g_original_switch_hold_check(input_state, action) : false;
 
-    if (action == kSwitchSpellAction && requested) BeginCapture(g_spell_capture);
-    if (action == kSwitchSpellAction && (requested || IsCaptureActive(g_spell_capture))) {
+    const bool can_capture = gameplay_state::GetCachedNormalGameplayHudState();
+    if (action == kSwitchSpellAction && requested && can_capture) BeginCapture(g_spell_capture);
+    if (action == kSwitchSpellAction && can_capture && (requested || IsCaptureActive(g_spell_capture))) {
         if (!g_logged_switch_spell_hold_suppression) {
             g_logged_switch_spell_hold_suppression = true;
             Log("Suppressed SwitchSpell hold check for radial capture.");
@@ -259,8 +270,8 @@ bool HookedSwitchHoldCheck(void* input_state, std::int32_t action)
         return false;
     }
 
-    if (action == kSwitchItemAction && requested) BeginCapture(g_item_capture);
-    if (action == kSwitchItemAction && (requested || IsCaptureActive(g_item_capture))) {
+    if (action == kSwitchItemAction && requested && can_capture) BeginCapture(g_item_capture);
+    if (action == kSwitchItemAction && can_capture && (requested || IsCaptureActive(g_item_capture))) {
         if (!g_logged_switch_item_hold_suppression) {
             g_logged_switch_item_hold_suppression = true;
             Log("Suppressed SwitchItem hold check for radial capture.");
@@ -275,8 +286,9 @@ bool HookedSwitchSpellRepeatCheck(void* input_state)
 {
     const bool requested = g_original_switch_spell_repeat_check != nullptr ?
         g_original_switch_spell_repeat_check(input_state) : false;
-    if (requested) BeginCapture(g_spell_capture);
-    if (requested || IsCaptureActive(g_spell_capture)) {
+    const bool can_capture = gameplay_state::GetCachedNormalGameplayHudState();
+    if (requested && can_capture) BeginCapture(g_spell_capture);
+    if (can_capture && (requested || IsCaptureActive(g_spell_capture))) {
         if (!g_logged_switch_spell_repeat_suppression) {
             g_logged_switch_spell_repeat_suppression = true;
             Log("Suppressed SwitchSpell repeat check for radial capture.");
@@ -291,8 +303,9 @@ bool HookedSwitchItemRepeatCheck(void* input_state)
 {
     const bool requested = g_original_switch_item_repeat_check != nullptr ?
         g_original_switch_item_repeat_check(input_state) : false;
-    if (requested) BeginCapture(g_item_capture);
-    if (requested || IsCaptureActive(g_item_capture)) {
+    const bool can_capture = gameplay_state::GetCachedNormalGameplayHudState();
+    if (requested && can_capture) BeginCapture(g_item_capture);
+    if (can_capture && (requested || IsCaptureActive(g_item_capture))) {
         if (!g_logged_switch_item_repeat_suppression) {
             g_logged_switch_item_repeat_suppression = true;
             Log("Suppressed SwitchItem repeat check for radial capture.");
@@ -442,10 +455,17 @@ void UpdateRadialInputStates()
     if (!gameplay_state::GetCachedNormalGameplayHudState()) {
         ResetCapture(g_spell_capture);
         ResetCapture(g_item_capture);
-        in_game_pad::InvalidateCaches();
-        g_input_cache_warm_phase = 0;
-        g_input_cache_warmed = false;
+        g_was_normal_gameplay = false;
         return;
+    }
+
+    if (!g_was_normal_gameplay) {
+        g_was_normal_gameplay = true;
+        if (g_input_cache_warmed &&
+            (!in_game_pad::IsInputCached(kSwitchSpell2Input) || !in_game_pad::IsInputCached(kSwitchItem2Input))) {
+            g_input_cache_warm_phase = 0;
+            g_input_cache_warmed = false;
+        }
     }
 
     if (!g_input_cache_warmed) {

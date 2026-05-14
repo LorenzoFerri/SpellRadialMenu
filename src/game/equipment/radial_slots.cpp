@@ -5,6 +5,7 @@
 
 #include <windows.h>
 
+#include <array>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -15,6 +16,19 @@ namespace {
 
 using namespace equip_access;
 
+using SpellSlotIds = std::array<std::uint32_t, kMaxSpellSlots>;
+using QuickItemIds = std::array<std::uint32_t, kMaxQuickItemSlots>;
+
+struct SpellCacheSignature {
+    std::uintptr_t equip_magic_data = 0;
+    SpellSlotIds ids = {};
+};
+
+struct QuickItemCacheSignature {
+    std::uintptr_t equip_item_data = 0;
+    QuickItemIds ids = {};
+};
+
 bool g_logged_no_equip_data = false;
 std::vector<std::uint32_t> g_last_spell_log_signature;
 std::vector<std::uint32_t> g_last_item_log_signature;
@@ -22,6 +36,9 @@ std::vector<RadialSlot> g_cached_spells;
 std::vector<RadialSlot> g_cached_quick_items;
 bool g_cached_spells_valid = false;
 bool g_cached_quick_items_valid = false;
+SpellCacheSignature g_cached_spells_signature = {};
+QuickItemCacheSignature g_cached_quick_items_signature = {};
+bool g_refresh_quick_items_next = false;
 ULONGLONG g_last_slow_spell_slots_log_ms = 0;
 ULONGLONG g_last_slow_item_slots_log_ms = 0;
 
@@ -75,6 +92,65 @@ int DisplayIndexForSlot(const std::vector<RadialSlot>& slots, std::size_t curren
     return -1;
 }
 
+bool ReadSpellSignature(std::uintptr_t equip_magic_data, SpellCacheSignature& signature)
+{
+    signature = {};
+    signature.equip_magic_data = equip_magic_data;
+
+    const auto spell_slots = equip_magic_data + kFirstMagicSlotOffset;
+    if (!IsReadableMemory(reinterpret_cast<const void*>(spell_slots), kMaxSpellSlots * kSpellEntryStride)) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < kMaxSpellSlots; ++i) {
+        signature.ids[i] = *reinterpret_cast<const std::uint32_t*>(spell_slots + i * kSpellEntryStride + kSpellIdOffset);
+    }
+    return true;
+}
+
+bool ReadQuickItemSignature(std::uintptr_t equip_item_data, const QuickItemInventorySnapshot& quick_items,
+    QuickItemCacheSignature& signature)
+{
+    signature = {};
+    signature.equip_item_data = equip_item_data;
+    return ReadQuickItemIds(quick_items, signature.ids.data(), signature.ids.size());
+}
+
+void RefreshSpellCacheIfChanged()
+{
+    const auto equip_magic_data = ResolveEquipMagicData();
+    if (!equip_magic_data) return;
+
+    SpellCacheSignature signature{};
+    if (!ReadSpellSignature(equip_magic_data, signature)) return;
+    if (g_cached_spells_valid && signature.equip_magic_data == g_cached_spells_signature.equip_magic_data &&
+        signature.ids == g_cached_spells_signature.ids) {
+        return;
+    }
+
+    g_cached_spells_valid = false;
+    (void)GetMemorizedSpells();
+}
+
+void RefreshQuickItemCacheIfChanged()
+{
+    const auto equip_item_data = ResolveEquipItemData();
+    if (!equip_item_data) return;
+
+    QuickItemInventorySnapshot quick_items{};
+    if (!ReadQuickItemInventorySnapshot(equip_item_data, quick_items)) return;
+
+    QuickItemCacheSignature signature{};
+    if (!ReadQuickItemSignature(equip_item_data, quick_items, signature)) return;
+    if (g_cached_quick_items_valid && signature.equip_item_data == g_cached_quick_items_signature.equip_item_data &&
+        signature.ids == g_cached_quick_items_signature.ids) {
+        return;
+    }
+
+    g_cached_quick_items_valid = false;
+    (void)GetQuickItems();
+}
+
 }  // namespace
 
 bool InitializeRadialSlots()
@@ -95,6 +171,19 @@ void InvalidateRadialSlotCaches()
     g_cached_quick_items.clear();
     g_cached_spells_valid = false;
     g_cached_quick_items_valid = false;
+    g_cached_spells_signature = {};
+    g_cached_quick_items_signature = {};
+    g_refresh_quick_items_next = false;
+}
+
+void RefreshRadialSlotCachesIfChanged()
+{
+    if (g_refresh_quick_items_next) {
+        RefreshQuickItemCacheIfChanged();
+    } else {
+        RefreshSpellCacheIfChanged();
+    }
+    g_refresh_quick_items_next = !g_refresh_quick_items_next;
 }
 
 int GetCurrentSpellSlot()
@@ -104,7 +193,9 @@ int GetCurrentSpellSlot()
     const int entry_slot = ResolveCurrentSpellEntrySlot(equip_magic_data);
     if (entry_slot < 0) return -1;
 
-    if (g_cached_spells_valid) return DisplayIndexForSlot(g_cached_spells, static_cast<std::size_t>(entry_slot));
+    if (g_cached_spells_valid && equip_magic_data == g_cached_spells_signature.equip_magic_data) {
+        return DisplayIndexForSlot(g_cached_spells, static_cast<std::size_t>(entry_slot));
+    }
 
     const auto spell_slots = equip_magic_data + kFirstMagicSlotOffset;
     if (!IsReadableMemory(reinterpret_cast<const void*>(spell_slots), kMaxSpellSlots * kSpellEntryStride)) return -1;
@@ -135,20 +226,21 @@ std::vector<RadialSlot> GetMemorizedSpells()
     g_logged_no_equip_data = false;
 
     const int current_entry = ResolveCurrentSpellEntrySlot(equip_magic_data);
-    if (g_cached_spells_valid) {
+    if (g_cached_spells_valid && equip_magic_data == g_cached_spells_signature.equip_magic_data) {
         spells = g_cached_spells;
         if (current_entry >= 0) UpdateCurrentFlags(spells, static_cast<std::size_t>(current_entry));
         LogSlowSlotDuration("GetMemorizedSpells", start, g_last_slow_spell_slots_log_ms);
         return spells;
     }
 
-    const auto spell_slots = equip_magic_data + kFirstMagicSlotOffset;
-    if (!IsReadableMemory(reinterpret_cast<const void*>(spell_slots), kMaxSpellSlots * kSpellEntryStride)) {
+    SpellCacheSignature signature{};
+    if (!ReadSpellSignature(equip_magic_data, signature)) {
         LogSlowSlotDuration("GetMemorizedSpells", start, g_last_slow_spell_slots_log_ms);
         return spells;
     }
+
     for (std::size_t i = 0; i < kMaxSpellSlots; ++i) {
-        const auto spell_id = *reinterpret_cast<const std::uint32_t*>(spell_slots + i * kSpellEntryStride + kSpellIdOffset);
+        const auto spell_id = signature.ids[i];
         if (spell_id == 0 || spell_id == 0xFFFFFFFFu) continue;
         const auto meta = ResolveSpellMetadata(spell_id);
         spells.push_back({
@@ -164,6 +256,7 @@ std::vector<RadialSlot> GetMemorizedSpells()
     }
     LogSlotSummaryIfChanged("Spell", spells, g_last_spell_log_signature);
     g_cached_spells = spells;
+    g_cached_spells_signature = signature;
     g_cached_spells_valid = true;
     LogSlowSlotDuration("GetMemorizedSpells", start, g_last_slow_spell_slots_log_ms);
     return spells;
@@ -197,14 +290,17 @@ int GetCurrentQuickItemSlot()
 {
     const auto equip_item_data = ResolveEquipItemData();
     if (!equip_item_data) return -1;
-    QuickItemInventorySnapshot quick_items{};
-    if (!ReadQuickItemInventorySnapshot(equip_item_data, quick_items)) return -1;
 
     std::int32_t slot = -1;
     if (!ReadMemory(equip_item_data + kSelectedQuickItemSlotOffset, slot)) return -1;
     if (slot < 0 || slot >= static_cast<int>(kMaxQuickItemSlots)) return -1;
 
-    if (g_cached_quick_items_valid) return DisplayIndexForSlot(g_cached_quick_items, static_cast<std::size_t>(slot));
+    if (g_cached_quick_items_valid && equip_item_data == g_cached_quick_items_signature.equip_item_data) {
+        return DisplayIndexForSlot(g_cached_quick_items, static_cast<std::size_t>(slot));
+    }
+
+    QuickItemInventorySnapshot quick_items{};
+    if (!ReadQuickItemInventorySnapshot(equip_item_data, quick_items)) return -1;
 
     if (!ReadQuickItemId(quick_items, static_cast<std::size_t>(slot))) return -1;
 
@@ -226,23 +322,27 @@ std::vector<RadialSlot> GetQuickItems()
         LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
         return items;
     }
-    QuickItemInventorySnapshot quick_items{};
-    if (!ReadQuickItemInventorySnapshot(equip_item_data, quick_items)) {
-        LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
-        return items;
-    }
 
     std::int32_t current_slot = -1;
     ReadMemory(equip_item_data + kSelectedQuickItemSlotOffset, current_slot);
-    if (g_cached_quick_items_valid) {
+    if (g_cached_quick_items_valid && equip_item_data == g_cached_quick_items_signature.equip_item_data) {
         items = g_cached_quick_items;
         if (current_slot >= 0) UpdateCurrentFlags(items, static_cast<std::size_t>(current_slot));
         LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
         return items;
     }
 
+    QuickItemInventorySnapshot quick_items{};
+    if (!ReadQuickItemInventorySnapshot(equip_item_data, quick_items)) {
+        LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
+        return items;
+    }
+
+    QuickItemCacheSignature signature{};
+    ReadQuickItemSignature(equip_item_data, quick_items, signature);
+
     for (std::size_t i = 0; i < kMaxQuickItemSlots; ++i) {
-        const auto item_id = ReadQuickItemId(quick_items, i);
+        const auto item_id = signature.ids[i];
         if (!item_id) continue;
 
         const auto meta = ResolveItemMetadata(item_id);
@@ -259,6 +359,7 @@ std::vector<RadialSlot> GetQuickItems()
     }
     LogSlotSummaryIfChanged("Quick item", items, g_last_item_log_signature);
     g_cached_quick_items = items;
+    g_cached_quick_items_signature = signature;
     g_cached_quick_items_valid = true;
     LogSlowSlotDuration("GetQuickItems", start, g_last_slow_item_slots_log_ms);
     return items;

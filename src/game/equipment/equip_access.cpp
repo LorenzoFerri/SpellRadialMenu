@@ -146,4 +146,42 @@ std::uint32_t ReadQuickItemId(const QuickItemInventorySnapshot& snapshot, std::s
     return ReadInventoryEntryGoodsId(snapshot.normal_items_head, normal_index, snapshot.normal_capacity);
 }
 
+bool ReadQuickItemIds(const QuickItemInventorySnapshot& snapshot, std::uint32_t* ids, std::size_t count)
+{
+    if (!ids || !snapshot.equip_item_data || count > kMaxQuickItemSlots) return false;
+    for (std::size_t i = 0; i < count; ++i) ids[i] = 0;
+
+    CachedReadableRegion quick_slot_region{};
+    CachedReadableRegion key_item_region{};
+    CachedReadableRegion normal_item_region{};
+    const auto quick_slots = snapshot.equip_item_data + kFirstQuickItemSlotOffset;
+    if (!EnsureCachedReadableMemory(quick_slots, count * kQuickItemSlotStride, quick_slot_region)) return false;
+
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto quick_slot = quick_slots + i * kQuickItemSlotStride;
+        const auto inventory_index = *reinterpret_cast<const std::int32_t*>(quick_slot + kQuickItemSlotInventoryIndexOffset);
+        if (inventory_index < 0) continue;
+
+        const auto item_slot = static_cast<std::uint32_t>(inventory_index);
+        std::uintptr_t entry = 0;
+        CachedReadableRegion* item_region = nullptr;
+        if (item_slot < snapshot.key_capacity) {
+            if (!snapshot.key_items_head || item_slot >= snapshot.key_items_length || snapshot.key_items_length > 10000) continue;
+            entry = snapshot.key_items_head + static_cast<std::uintptr_t>(item_slot) * kInventoryEntryStride;
+            item_region = &key_item_region;
+        } else {
+            const std::uint32_t normal_index = item_slot - snapshot.key_capacity;
+            if (!snapshot.normal_items_head || normal_index >= snapshot.normal_capacity || snapshot.normal_capacity > 10000) continue;
+            entry = snapshot.normal_items_head + static_cast<std::uintptr_t>(normal_index) * kInventoryEntryStride;
+            item_region = &normal_item_region;
+        }
+
+        const auto item_id_address = entry + kInventoryEntryItemIdOffset;
+        if (!EnsureCachedReadableMemory(item_id_address, sizeof(std::uint32_t), *item_region)) continue;
+        ids[i] = UnpackGoodsItemId(*reinterpret_cast<const std::uint32_t*>(item_id_address));
+    }
+
+    return true;
+}
+
 }  // namespace radial_menu_mod::equip_access

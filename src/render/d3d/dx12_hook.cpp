@@ -54,6 +54,7 @@ static bool                        g_icon_srv_allocated = false;
 static bool                        g_icons_ready = false;
 static bool                        g_asset_reader_installed = false;
 static bool                        g_gameplay_ready_last_frame = false;
+static UINT                        g_gameplay_ready_frame_count = 0;
 static bool                        g_logged_icon_vfs_unavailable = false;
 static ULONGLONG                   g_next_icon_init_attempt_ms = 0;
 static int                         g_icon_prewarm_phase = 0;
@@ -279,6 +280,7 @@ static void ReleaseOverlayResources(const char* reason)
     ResetIconPrewarm();
     g_refreshed_open_icon_atlases = false;
     g_gameplay_ready_last_frame = false;
+    g_gameplay_ready_frame_count = 0;
     g_last_slow_asset_install_log_ms = 0;
     g_last_slow_gameplay_state_log_ms = 0;
     g_last_slow_native_input_log_ms = 0;
@@ -449,6 +451,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
     section_start = TimingStart();
     const bool gameplay_ready = gameplay_state::RefreshNormalGameplayHudState();
     const bool left_gameplay = g_gameplay_ready_last_frame && !gameplay_ready;
+    g_gameplay_ready_frame_count = gameplay_ready ? std::min<UINT>(g_gameplay_ready_frame_count + 1, 60) : 0;
     LogSlowDuration("gameplay_state::RefreshNormalGameplayHudState", section_start, 4, g_last_slow_gameplay_state_log_ms);
 
     if (!kDisableNativeInputForDiagnosticBuild && (gameplay_ready || left_gameplay)) {
@@ -467,14 +470,11 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain3* swap_chain, UINT
         if (g_icons_ready && radial_open && !g_refreshed_open_icon_atlases) {
             g_refreshed_open_icon_atlases = RefreshRequiredIconAtlasesForSlots(radial_input::GetOpenRadialSlots());
         }
-        if (g_icons_ready && !radial_open) {
+        if (g_icons_ready && !radial_open && g_gameplay_ready_frame_count > 1) {
             g_refreshed_open_icon_atlases = false;
+            RefreshRadialSlotCachesIfChanged();
             if (g_icon_prewarm_phase < 3) PrewarmRadialIcons();
         }
-    } else if (left_gameplay) {
-        InvalidateRadialSlotCaches();
-        ResetIconPrewarm();
-        g_refreshed_open_icon_atlases = false;
     }
 
     if (!radial_open) {

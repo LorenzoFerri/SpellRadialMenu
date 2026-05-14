@@ -38,5 +38,6 @@ int ResolveCurrentSpellEntrySlot(std::uintptr_t equip_magic_data);
 bool ReadQuickItemInventorySnapshot(std::uintptr_t equip_item_data, QuickItemInventorySnapshot& snapshot);
 std::uint32_t ReadQuickItemId(std::uintptr_t equip_item_data, std::size_t slot);
 std::uint32_t ReadQuickItemId(const QuickItemInventorySnapshot& snapshot, std::size_t slot);
+bool ReadQuickItemIds(const QuickItemInventorySnapshot& snapshot, std::uint32_t* ids, std::size_t count);
 
 }  // namespace radial_menu_mod::equip_access
