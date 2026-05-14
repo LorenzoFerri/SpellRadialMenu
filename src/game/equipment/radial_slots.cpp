@@ -38,7 +38,6 @@ bool g_cached_spells_valid = false;
 bool g_cached_quick_items_valid = false;
 SpellCacheSignature g_cached_spells_signature = {};
 QuickItemCacheSignature g_cached_quick_items_signature = {};
-bool g_refresh_quick_items_next = false;
 ULONGLONG g_last_slow_spell_slots_log_ms = 0;
 ULONGLONG g_last_slow_item_slots_log_ms = 0;
 
@@ -116,41 +115,6 @@ bool ReadQuickItemSignature(std::uintptr_t equip_item_data, const QuickItemInven
     return ReadQuickItemIds(quick_items, signature.ids.data(), signature.ids.size());
 }
 
-void RefreshSpellCacheIfChanged()
-{
-    const auto equip_magic_data = ResolveEquipMagicData();
-    if (!equip_magic_data) return;
-
-    SpellCacheSignature signature{};
-    if (!ReadSpellSignature(equip_magic_data, signature)) return;
-    if (g_cached_spells_valid && signature.equip_magic_data == g_cached_spells_signature.equip_magic_data &&
-        signature.ids == g_cached_spells_signature.ids) {
-        return;
-    }
-
-    g_cached_spells_valid = false;
-    (void)GetMemorizedSpells();
-}
-
-void RefreshQuickItemCacheIfChanged()
-{
-    const auto equip_item_data = ResolveEquipItemData();
-    if (!equip_item_data) return;
-
-    QuickItemInventorySnapshot quick_items{};
-    if (!ReadQuickItemInventorySnapshot(equip_item_data, quick_items)) return;
-
-    QuickItemCacheSignature signature{};
-    if (!ReadQuickItemSignature(equip_item_data, quick_items, signature)) return;
-    if (g_cached_quick_items_valid && signature.equip_item_data == g_cached_quick_items_signature.equip_item_data &&
-        signature.ids == g_cached_quick_items_signature.ids) {
-        return;
-    }
-
-    g_cached_quick_items_valid = false;
-    (void)GetQuickItems();
-}
-
 }  // namespace
 
 bool InitializeRadialSlots()
@@ -173,17 +137,6 @@ void InvalidateRadialSlotCaches()
     g_cached_quick_items_valid = false;
     g_cached_spells_signature = {};
     g_cached_quick_items_signature = {};
-    g_refresh_quick_items_next = false;
-}
-
-void RefreshRadialSlotCachesIfChanged()
-{
-    if (g_refresh_quick_items_next) {
-        RefreshQuickItemCacheIfChanged();
-    } else {
-        RefreshSpellCacheIfChanged();
-    }
-    g_refresh_quick_items_next = !g_refresh_quick_items_next;
 }
 
 int GetCurrentSpellSlot()
