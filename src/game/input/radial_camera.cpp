@@ -18,7 +18,7 @@ constexpr std::uintptr_t kChrCamLockOnInputOffset = 0xB0;
 constexpr float kAccelerationPresenceEpsilon = 0.001f;
 constexpr float kPadAccelerationSelectionDeadzone = 0.28f;
 constexpr float kPadAccelerationSelectionFullScale = 0.7f;
-constexpr float kMoveAccelerationSelectionDeadzone = 0.02f;
+constexpr float kMoveAccelerationSelectionDeadzone = 0.15f;
 constexpr float kMoveAccelerationSelectionFullScale = 0.2f;
 
 using ChrCamInputAccelerationUpdateFn = void (*)(void* chr_cam, bool enabled);
