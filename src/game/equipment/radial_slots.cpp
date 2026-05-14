@@ -321,11 +321,13 @@ std::vector<RadialSlot> GetQuickItems()
 bool SwitchToQuickItemSlot(std::size_t slot_index)
 {
     const auto equip_item_data = ResolveEquipItemData();
-    if (!equip_item_data || slot_index >= kMaxQuickItemSlots || !ReadQuickItemId(equip_item_data, slot_index)) return false;
+    if (!equip_item_data) { Log("Quick item switch skipped: EquipItemData unresolved."); return false; }
+    if (slot_index >= kMaxQuickItemSlots) { Log("Quick item switch skipped: slot %zu out of range.", slot_index); return false; }
 
     auto* selected = reinterpret_cast<std::int32_t*>(equip_item_data + kSelectedQuickItemSlotOffset);
     *selected = static_cast<std::int32_t>(slot_index);
     if (*selected == static_cast<std::int32_t>(slot_index)) return true;
+    Log("Quick item switch write did not persist for slot %zu.", slot_index);
     return false;
 }
 
